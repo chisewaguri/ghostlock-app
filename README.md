@@ -24,7 +24,7 @@ At startup the kernel is matched via `uname -r`; unsupported kernels are rejecte
 
 Open the **GhostLock** app and tap **Run**; the exploit runs automatically.
 
-Install the KernelSU app (`me.weishu.kernelsu`) first so `ksud` is available. Without `ksud`, stages W1/W2 still grant uid 0, but the KernelSU module will not be loaded.
+Install the KernelSU (`me.weishu.kernelsu`) or ReSukiSU (`com.resukisu.resukisu`) first so `ksud` is available. Without `ksud`, stages W1/W2 still grant uid 0, but the KernelSU module will not be loaded.
 
 ## Command-Line Debugging
 

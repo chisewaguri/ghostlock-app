@@ -22,9 +22,7 @@
 
 ## 快速开始
 
-打开 **GhostLock** 应用，点击 **执行** ，软件会自动完成提权流程，
-需先自行安装 KernelSU（`me.weishu.kernelsu`）软件以使用 `ksud`，
-缺少 `ksud` 时 W1/W2 仍可拿到 uid 0，但不会加载 KernelSU 模块。
+打开 **GhostLock** 应用，点击 **执行** ，软件会自动完成提权流程，需先自行安装 KernelSU（`me.weishu.kernelsu`）或 ReSukiSU（`com.resukisu.resukisu`）软件以使用 `ksud`，缺少 `ksud` 时 W1/W2 仍可拿到 uid 0，但不会加载 KernelSU 模块。
 
 ## 命令行调试
 

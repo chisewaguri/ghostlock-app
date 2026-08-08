@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <queries>
         <package android:name="me.weishu.kernelsu" />
+        <package android:name="com.resukisu.resukisu" />
     </queries>
     <application
         android:allowBackup="false"
