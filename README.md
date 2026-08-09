@@ -12,6 +12,7 @@
 | `6.6.89-android15-8-g096cdb6ecefc-ab14358676-4k`       | OPPO Pad 4 Pro                        |
 | `6.6.118-android15-8-g2e6b9c3812c5-ab15114928-4k`      | OPPO Find N5                          |
 | `6.6.118-android15-8-g608a629fedf7-ab15154340-4k`      | Redmi K90 Ultra                       |
+| `6.6.118-android15-8-ge56cf6b09cca-ab15511674-4k`      | Redmi K90 Ultra                       |
 | `6.6.118-android15-8-ge58033dc8ea6-abogki498046332-4k` | OPPO Pad 5                            |
 | `6.6.118-android15-8-gebdfad32d749-ab15099304-4k`      | OPPO Find X8 / Find X8 Pro            |
 | `6.12.23-android16-5-g16e473de48a3-abogki462654244-4k` | Redmi K90 Pro Max                     |
