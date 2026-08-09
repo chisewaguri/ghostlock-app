@@ -25,6 +25,10 @@
 
 打开 **GhostLock** 应用，点击 **执行** ，软件会自动完成提权流程，需先自行安装 KernelSU（`me.weishu.kernelsu`）或 ReSukiSU（`com.resukisu.resukisu`）软件以使用 `ksud`，缺少 `ksud` 时 W1/W2 仍可拿到 uid 0，但不会加载 KernelSU 模块。
 
+### CPU 核心对
+
+提权路线是双核竞争：主线程钉在 `CORE` 上跑 pselect 爆破，consumer 线程钉在 `CONSUMER_CORE` 上扰动同一 waiter 的优先级，默认 0/1。App 内的 **CPU 核心对** 选项会按频率自动分簇列出可选的相邻核心对（大核/中核/小核），选择后通过 `GHOSTLOCK_CORE`/`GHOSTLOCK_CONSUMER_CORE` 传给 native；命令行调试可用 `GHOSTLOCK_CORE=6 GHOSTLOCK_CONSUMER_CORE=7 ./ghostlock` 指定。请求的核心不在当前 cpuset 内时会自动回退到 0/1 并告警。
+
 ## 命令行调试
 
 adb/shell 环境无 seccomp 过滤，会跳过 W3 阶段，适合快速验证：

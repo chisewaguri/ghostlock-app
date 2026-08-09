@@ -27,6 +27,10 @@ Open the **GhostLock** app and tap **Run**; the exploit runs automatically.
 
 Install the KernelSU (`me.weishu.kernelsu`) or ReSukiSU (`com.resukisu.resukisu`) first so `ksud` is available. Without `ksud`, stages W1/W2 still grant uid 0, but the KernelSU module will not be loaded.
 
+### CPU core pair
+
+The route is a two-core race: the main thread hammers pselect pinned to `CORE` while a consumer thread perturbs the same waiter's priority on `CONSUMER_CORE` (defaults 0/1). The **CPU cores** option in the app groups online CPUs by max frequency and offers adjacent pairs (big/mid/little clusters); the choice is passed to native via `GHOSTLOCK_CORE`/`GHOSTLOCK_CONSUMER_CORE`. For shell runs: `GHOSTLOCK_CORE=6 GHOSTLOCK_CONSUMER_CORE=7 ./ghostlock`. Requested cores outside the current cpuset are rejected with a fallback to 0/1 and a warning.
+
 ## Command-Line Debugging
 
 The adb/shell environment has no seccomp filter, so the W3 stage is skipped - handy for quick verification:
