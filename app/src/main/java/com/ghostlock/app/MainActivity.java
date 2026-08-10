@@ -70,10 +70,7 @@ public class MainActivity extends Activity {
     private final List<int[]> cpuPairs = new ArrayList<>();
     private final List<String> cpuPairLabels = new ArrayList<>();
     private TextView deviceInfo;
-    private TextView statusInfo;
     private TextView logView;
-    private View statusDot;
-    private View statusChip;
     private LinearLayout kernelChip;
     private TextView kernelChipText;
     private Spinner cpuSpinner;
@@ -300,9 +297,6 @@ public class MainActivity extends Activity {
 
         rootView = findViewById(R.id.root);
         deviceInfo = findViewById(R.id.deviceInfo);
-        statusInfo = findViewById(R.id.statusInfo);
-        statusDot = findViewById(R.id.statusDot);
-        statusChip = findViewById(R.id.statusChip);
         logView = findViewById(R.id.logView);
         logScroll = findViewById(R.id.logScroll);
         runButton = findViewById(R.id.runButton);
@@ -316,7 +310,7 @@ public class MainActivity extends Activity {
         buildCpuPairs();
         restoreCpuPair();
         applyKernelStatus();
-        setRunState(RunState.IDLE, getString(R.string.status_idle));
+        setRunState(RunState.IDLE);
 
         runButton.setOnClickListener(v -> startExploit());
         copyButton.setOnClickListener(v -> copyLogs());
@@ -330,9 +324,7 @@ public class MainActivity extends Activity {
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 cpuPairIndex = position;
                 int[] pair = cpuPairs.get(position);
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                        .putString(PREF_CPU_PAIR, position == 0 ? "auto" : pair[0] + "," + pair[1])
-                        .apply();
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_CPU_PAIR, position == 0 ? "auto" : pair[0] + "," + pair[1]).apply();
             }
 
             @Override
@@ -407,7 +399,7 @@ public class MainActivity extends Activity {
         if (!running.compareAndSet(false, true)) {
             return;
         }
-        setRunState(RunState.RUNNING, getString(R.string.status_running));
+        setRunState(RunState.RUNNING);
         // keep the screen awake
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         appendLog("==== start ====");
@@ -433,52 +425,18 @@ public class MainActivity extends Activity {
                     running.set(false);
                     getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                     if (finalCode == 0) {
-                        setRunState(RunState.SUCCESS, getString(R.string.status_success));
+                        setRunState(RunState.SUCCESS);
                     } else {
-                        setRunState(RunState.FAILED, getString(R.string.status_failed) + " (" + finalCode + ")");
+                        setRunState(RunState.FAILED);
                     }
                 });
             }
         });
     }
 
-    private void setRunState(RunState state, String text) {
-        statusInfo.setText(text);
+    private void setRunState(RunState state) {
         runButton.setEnabled(state != RunState.RUNNING);
         runButton.setText(state == RunState.RUNNING ? R.string.action_running : R.string.action_run);
-
-        int color;
-        int chipBg = switch (state) {
-            case RUNNING -> {
-                color = getColor(R.color.status_running);
-                yield getColor(R.color.status_running_bg);
-            }
-            case SUCCESS -> {
-                color = getColor(R.color.status_success);
-                yield getColor(R.color.status_success_bg);
-            }
-            case FAILED -> {
-                color = getColor(R.color.status_error);
-                yield getColor(R.color.status_error_bg);
-            }
-            default -> {
-                color = getColor(R.color.status_idle);
-                yield getColor(R.color.status_idle_bg);
-            }
-        };
-
-        statusInfo.setTextColor(color);
-        if (statusDot.getBackground() instanceof GradientDrawable) {
-            ((GradientDrawable) statusDot.getBackground().mutate()).setColor(color);
-        } else {
-            statusDot.setBackgroundTintList(ColorStateList.valueOf(color));
-        }
-
-        if (statusChip.getBackground() instanceof GradientDrawable) {
-            ((GradientDrawable) statusChip.getBackground().mutate()).setColor(chipBg);
-        } else {
-            statusChip.setBackgroundTintList(ColorStateList.valueOf(chipBg));
-        }
     }
 
     private File resolveBinary() throws IOException {
