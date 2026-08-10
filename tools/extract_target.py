@@ -161,9 +161,8 @@ def recover_kernel_phys_load(path: Path) -> int:
 LZ4_LEGACY_MAGIC = b"\x02\x21\x4c\x18"
 LZ4_MAX_IMAGE = 0x10000000  # 256 MiB upper bound for a decompressed arm64 Image
 
-# _text VA encodes the MTK DRAM base (text_offset=0); derive
-# kernel_phys_load from kallsyms as _text - MTK_VADDR_BASE.
-# MTK_DEFAULT_PHYS_LOAD is only a fallback when _text is unavailable.
+# _text VA encodes the MTK DRAM base (text_offset=0); derive phys from
+# _text - MTK_VADDR_BASE; MTK_DEFAULT_PHYS_LOAD is the fallback.
 MTK_VADDR_BASE = 0xFFFFFFC000000000
 MTK_DEFAULT_PHYS_LOAD = 0x80000000
 
@@ -191,6 +190,7 @@ class BootImage:
     path: Path
     kernel: bytes
     mtk_lz4: bool = False
+    mtk_gzip: bool = False
 
     @classmethod
     def load(cls, path: Path) -> "BootImage":
@@ -213,6 +213,12 @@ class BootImage:
             if kernel[:4] == LZ4_LEGACY_MAGIC:
                 kernel = decompress_lz4_legacy(kernel)
                 return cls(path, kernel, True)
+            if kernel[:3] == b"\x1f\x8b\x08":
+                try:
+                    kernel = gzip.decompress(kernel)
+                except OSError as exc:
+                    raise ExtractError(f"invalid gzip kernel payload: {exc}") from exc
+                return cls(path, kernel, False, True)
             return cls(path, kernel)
         if raw[:3] == b"\x1f\x8b\x08":
             try:
@@ -248,6 +254,40 @@ class BootImage:
                 continue
             strings = pos + hdr_len + str_off
             if str_len and self.kernel[strings] == 0:
+                # Some vendors append strings past the declared str_len
+                # (only when strings are the last section); extend over the
+                # NUL-terminated printable tail to avoid cutting mid-string.
+                if str_off + str_len >= type_off + type_len:
+                    str_end = strings + str_len
+                    scan = str_end
+                    while scan < len(self.kernel) and scan - str_end < (1 << 20):
+                        byte = self.kernel[scan]
+                        if byte == 0:
+                            # Skip a NUL only if printable text follows;
+                            # a lone NUL ends the table.
+                            if (
+                                scan + 1 < len(self.kernel)
+                                and 0x20 <= self.kernel[scan + 1] < 0x7F
+                            ):
+                                scan += 1
+                                continue
+                            break
+                        if 0x20 <= byte < 0x7F:
+                            nxt = self.kernel.find(
+                                b"\x00", scan, min(scan + 256, len(self.kernel))
+                            )
+                            if nxt < 0:
+                                break
+                            scan = nxt
+                            continue
+                        break
+                    if scan > str_end:
+                        print(
+                            "warning: BTF strings table extends past the "
+                            f"declared str_len by 0x{scan - str_end:x} bytes",
+                            file=sys.stderr,
+                        )
+                    total = max(total, scan - pos)
                 candidates.append(self.kernel[pos : pos + total])
         return max(candidates, key=len) if candidates else None
 
@@ -279,7 +319,12 @@ class Btf:
         if magic != BTF_MAGIC or version != 1 or hdr_len < 24:
             raise ExtractError("invalid BTF header")
         self.types_raw = raw[hdr_len + type_off : hdr_len + type_off + type_len]
-        self.strings = raw[hdr_len + str_off : hdr_len + str_off + str_len]
+        declared = hdr_len + max(type_off + type_len, str_off + str_len)
+        if len(raw) > declared:
+            # embedded_btf extended the blob with strings past str_len
+            self.strings = raw[hdr_len + str_off:]
+        else:
+            self.strings = raw[hdr_len + str_off : hdr_len + str_off + str_len]
         self.types: dict[int, BtfType] = {}
         self.by_name: dict[str, list[BtfType]] = {}
         self._parse()
@@ -291,7 +336,8 @@ class Btf:
             raise ExtractError(f"invalid BTF string offset {offset}")
         end = self.strings.find(b"\x00", offset)
         if end < 0:
-            raise ExtractError("unterminated BTF string")
+            # Truncated tail: treat end-of-blob as the string terminator.
+            end = len(self.strings)
         return self.strings[offset:end].decode("utf-8", "replace")
 
     def _parse(self) -> None:
@@ -645,10 +691,9 @@ def resolve_symbols(
     result["off_slide_loggers_0_1"] = (
         unique(symbols, "loggers") + 0x10 if unique(symbols, "loggers") is not None else None
     )
-    # Rust ashmem keeps the fops table in a BSS static (ASHMEM_FOPS_PTR) that
-    # is filled at init, so prefer its kallsyms anchor over the in-file scan.
-    # The generic ("ashmem", "fops") fragments also match get_shmem_fops/
-    # VMFILE_FOPS, so only use them as a last resort.
+    # Rust ashmem anchors fops in a BSS static (ASHMEM_FOPS_PTR) filled at
+    # init; the generic ("ashmem", "fops") match also hits get_shmem_fops/
+    # VMFILE_FOPS, so keep it as a last resort.
     result["off_ashmem_fops"] = find_data_symbol(
         symbols, types, "ashmem_fops", ("ashmem_fops_ptr",)
     )
@@ -656,9 +701,8 @@ def resolve_symbols(
         result["off_ashmem_fops"] = find_data_symbol(
             symbols, types, "ashmem_fops", ("ashmem", "fops")
         )
-    # Rust ashmem registers its miscdevice at runtime and leaves no static
-    # ashmem_misc slot; the misc class file_operations table (misc_fops) is a
-    # stable writable data symbol used as the CFI write/restore target.
+    # Rust ashmem has no static ashmem_misc; misc_fops is the stable
+    # writable CFI write/restore target.
     misc = find_data_symbol(symbols, types, "ashmem_misc", ("ashmem_misc",))
     misc_fops_field = btf.field("miscdevice", "fops") if btf else None
     if misc_fops_field is None and btf is None and kernel_struct_macro(release) == "STRUCT_OFFSETS_6_6":
@@ -1046,9 +1090,8 @@ def derive_pselect_layout(
         raise InfeasibleError(
             f"PSELECT_WAITER_WORD_SHIFT too large: {shift}"
         )
-    # Feasibility: core_sys_select copies 3 x FDS_BYTES(route_nfds) fd_set
-    # qwords (0..14 for nfds=320); the waiter lock at qword shift+11 must fit
-    # inside, else task/lock land in the zeroed tail and the route cannot work.
+    # core_sys_select copies 3 x FDS_BYTES(nfds) fd_set qwords (0..14 for
+    # nfds=320); waiter lock at shift+11 must fit inside those words.
     if shift > 3:
         raise InfeasibleError(
             f"futex waiter starts {shift} qwords above the fd_set buffer; "
@@ -1572,12 +1615,12 @@ def main(argv: list[str] | None = None) -> int:
         base = text_base or unique(symbols, "_head")
         if base is None:
             raise ExtractError("_text/_head is not unique in kallsyms")
-        if args.kernel_phys_load is None and boot.mtk_lz4:
+        if args.kernel_phys_load is None and (boot.mtk_lz4 or boot.mtk_gzip):
             if text_base is not None:
                 args.kernel_phys_load = text_base - MTK_VADDR_BASE
                 if 0 < args.kernel_phys_load <= 0xFFFFFFFF:
                     print(
-                        "info: MediaTek LZ4 image; kernel_phys_load derived "
+                        "info: MediaTek compressed image; kernel_phys_load derived "
                         f"from _text: 0x{args.kernel_phys_load:x} (DRAM base; "
                         "pass --phys to override)",
                         file=sys.stderr,
@@ -1594,7 +1637,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 args.kernel_phys_load = MTK_DEFAULT_PHYS_LOAD
                 print(
-                    "info: MediaTek LZ4 image; _text unavailable, assuming "
+                    "info: MediaTek compressed image; _text unavailable, assuming "
                     f"kernel_phys_load=0x{MTK_DEFAULT_PHYS_LOAD:x} (DRAM "
                     "base; pass --phys to override)",
                     file=sys.stderr,
@@ -1654,8 +1697,8 @@ def main(argv: list[str] | None = None) -> int:
                         file=sys.stderr,
                     )
                 else:
-                    # Linuxoid indexes waiter words from 0, ours from 2:
-                    # our shift = derived value - 2.
+                    # Linuxoid words are 0-based, ours 2-based:
+                    # shift = derived value - 2.
                     derived["pselect_waiter_shift"] = (
                         pselect["PSELECT_WAITER_WORD_SHIFT"] - 2
                     )
