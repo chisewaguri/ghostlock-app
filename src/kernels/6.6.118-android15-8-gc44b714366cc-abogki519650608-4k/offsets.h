@@ -3,7 +3,7 @@
 OFFSETS_ENTRY(
     "6.6.118-android15-8-gc44b714366cc-abogki519650608-4k",
     STRUCT_OFFSETS_6_6,
-    .kernel_phys_load = 0x80000000,
+    .kernel_phys_load = 0xa8000000,
     .pselect_waiter_shift = -2,
     .off_init_task = 0x0213e2c0,
     .off_init_cred = 0x02150788,
@@ -19,7 +19,7 @@ OFFSETS_ENTRY(
     .off_configfs_bin_write_iter = 0x0049258c,
     .off_copy_splice_read = 0x00415c88,
     .off_noop_llseek = 0x003c8a28,
-    .off_slide_loggers_0_1 = 0x021321d0,
+    .off_slide_loggers_0_1 = 0x021321c8,
     .off_ashmem_fops = 0x012f7980,
     .off_ashmem_misc_fops = 0x0229cda8,
     .off_ashmem_ioctl = 0x00c8cf04,
@@ -29,3 +29,10 @@ OFFSETS_ENTRY(
     .off_ashmem_release = 0x00c8d8bc,
     .off_ashmem_show_fdinfo = 0x00c8d948,
 ),
+
+/* BTF reference (runtime uses target.h defaults): */
+/* #define STRUCT_PAGE_SIZE 0x40 */
+/* #define STRUCT_PAGE_COMPOUND_HEAD 0x8 */
+/* #define STRUCT_PAGE_TYPE 0x30 */
+/* #define STRUCT_SLAB_CACHE 0x8 */
+/* #define STRUCT_MM_STRUCT 0x4C0 */

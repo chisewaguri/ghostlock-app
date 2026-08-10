@@ -1405,8 +1405,24 @@ def warn_existing_mismatches(
                 )
 
 
+def _kernel_include_sort_key(include: str) -> list[tuple[int, int | str]]:
+    """Natural sort key matching VSCode's folder order: digit runs compare
+    as numbers, other text case-insensitively, digits before letters."""
+    path = include[len('#include "'):-len('/offsets.h"')]
+    key: list[tuple[int, int | str]] = []
+    for part in re.split(r"(\d+)", path):
+        if not part:
+            continue
+        if part.isdigit():
+            key.append((0, int(part)))
+        else:
+            key.append((1, part.casefold()))
+    return key
+
+
 def register_kernel(key: str) -> Path:
-    """Add #include "<key>/offsets.h" to src/kernels/offsets.h if missing."""
+    """Add #include "<key>/offsets.h" to src/kernels/offsets.h if missing,
+    inserting it in VSCode folder sort order instead of at the end."""
     header = KERNEL_ROOT / "offsets.h"
     text = header.read_text(encoding="utf-8")
     include = f'#include "{key}/offsets.h"'
@@ -1415,7 +1431,14 @@ def register_kernel(key: str) -> Path:
     marker = re.search(r"^\s*\{\s*\.uname_r\s*=\s*NULL", text, re.MULTILINE)
     if marker is None:
         raise ExtractError(f"cannot locate NULL terminator in {header}")
-    text = text[: marker.start()] + include + "\n" + text[marker.start():]
+    block = text[: marker.start()]
+    insert_at = marker.start()
+    key_order = _kernel_include_sort_key(include)
+    for existing in re.findall(r'#include "[^"]+/offsets\.h"', block):
+        if _kernel_include_sort_key(existing) > key_order:
+            insert_at = block.index(existing)
+            break
+    text = text[: insert_at] + include + "\n" + text[insert_at:]
     header.write_text(text, encoding="utf-8")
     return header
 
