@@ -165,6 +165,8 @@ LZ4_MAX_IMAGE = 0x10000000  # 256 MiB upper bound for a decompressed arm64 Image
 # _text - MTK_VADDR_BASE; MTK_DEFAULT_PHYS_LOAD is the fallback.
 MTK_VADDR_BASE = 0xFFFFFFC000000000
 MTK_DEFAULT_PHYS_LOAD = 0x80000000
+QC_PHYS_LOAD_6_6 = 0xA8000000
+QC_PHYS_LOAD_6_12 = 0xC7800000
 
 
 def decompress_lz4_legacy(payload: bytes) -> bytes:
@@ -1364,6 +1366,47 @@ def kernel_struct_macro(release: str | None) -> str:
     return "STRUCT_OFFSETS_6_6"
 
 
+def phys_needs_override(release: str | None, phys: int | None) -> bool:
+    """kernel_phys_load is derived at runtime (MTK DRAM base, Qualcomm
+    version default); the table only stores explicit deviations."""
+    if phys is None or phys == MTK_DEFAULT_PHYS_LOAD:
+        return False
+    default = (
+        QC_PHYS_LOAD_6_12
+        if kernel_struct_macro(release) == "STRUCT_OFFSETS_6_12"
+        else QC_PHYS_LOAD_6_6
+    )
+    return phys != default
+
+
+def validate_kernel_phys_load(release: str | None, phys: int | None, mtk: bool) -> None:
+    """Warn when kernel_phys_load deviates from the fixed per-family values:
+    MediaTek loads at the DRAM base, Qualcomm uses a version default."""
+    if phys is None:
+        return
+    expected = (
+        MTK_DEFAULT_PHYS_LOAD
+        if mtk
+        else (
+            QC_PHYS_LOAD_6_12
+            if kernel_struct_macro(release) == "STRUCT_OFFSETS_6_12"
+            else QC_PHYS_LOAD_6_6
+        )
+    )
+    if phys == expected:
+        return
+    note = (
+        "runtime forces the DRAM base for MediaTek"
+        if mtk
+        else "the entry will carry it as an explicit override"
+    )
+    print(
+        f"warning: kernel_phys_load=0x{phys:x} does not match the "
+        f"{'MediaTek' if mtk else 'Qualcomm'} default 0x{expected:x}; {note}",
+        file=sys.stderr,
+    )
+
+
 def pselect_waiter_shift_for(release: str | None) -> int:
     """Fallback when --llvm-objdump is unavailable: 6.12 -> 0, 6.6 -> -2.
     Unreliable for kernels with a non-inlined do_pselect middle layer (e.g.
@@ -1382,7 +1425,7 @@ def render_device(
     lines.append("OFFSETS_ENTRY(")
     lines.append(f'    "{release}",')
     lines.append(f"    {kernel_struct_macro(release)},")
-    if phys is not None:
+    if phys_needs_override(release, phys):
         lines.append(f"    .kernel_phys_load = 0x{phys:x},")
     lines.append(f"    .pselect_waiter_shift = {pselect_shift},")
     for key, value in symbols.items():
@@ -1502,7 +1545,7 @@ def render_c(release: str | None, symbols: dict[str, int | None], structs: dict[
             lines.append(f"  .{key} = 0x{value:X},{suffix}")
     lines.append("")
     lines.append("OFFSETS_ENTRY(\"%s\"," % (release or name))
-    if phys is not None:
+    if phys_needs_override(release, phys):
         lines.append(f"  .kernel_phys_load=0x{phys:X},")
     lines.append(f"  .pselect_waiter_shift={pselect_shift},")
     for key, value in symbols.items():
@@ -1642,6 +1685,9 @@ def main(argv: list[str] | None = None) -> int:
                     "base; pass --phys to override)",
                     file=sys.stderr,
                 )
+        validate_kernel_phys_load(
+            boot.release(), args.kernel_phys_load, boot.mtk_lz4 or boot.mtk_gzip
+        )
         symbol_offsets = resolve_symbols(
             symbols, types, btf, base, boot.release()
         )

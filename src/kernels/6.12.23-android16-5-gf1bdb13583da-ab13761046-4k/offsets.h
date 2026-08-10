@@ -3,7 +3,6 @@
 OFFSETS_ENTRY(
     "6.12.23-android16-5-gf1bdb13583da-ab13761046-4k",
     STRUCT_OFFSETS_6_12,
-    .kernel_phys_load = 0xc7800000,
     .pselect_waiter_shift = 0,
     .off_init_task = 0x023dcec0,
     .off_init_cred = 0x023f2a28,
