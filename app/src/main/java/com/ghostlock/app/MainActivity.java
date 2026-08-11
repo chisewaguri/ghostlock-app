@@ -19,7 +19,6 @@ import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
 import android.view.View;
-import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
@@ -340,23 +339,13 @@ public class MainActivity extends Activity {
     }
 
     private void setupSystemBars() {
-        Window window = getWindow();
-        int barColor = getColor(R.color.status_bar);
-
-        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
-        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        window.setStatusBarColor(barColor);
-        window.setNavigationBarColor(getColor(R.color.nav_bar));
-
-        window.setStatusBarContrastEnforced(false);
-        window.setNavigationBarContrastEnforced(false);
-
-        WindowInsetsController controller = window.getInsetsController();
-        if (controller != null) {
-            int lightStatus = getResources().getBoolean(R.bool.window_light_status_bar) ? WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS : 0;
-            int lightNav = getResources().getBoolean(R.bool.window_light_navigation_bar) ? WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS : 0;
-            controller.setSystemBarsAppearance(lightStatus | lightNav, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+        WindowInsetsController controller = getWindow().getInsetsController();
+        if (controller == null) {
+            return;
         }
+        int lightStatus = getResources().getBoolean(R.bool.window_light_status_bar) ? WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS : 0;
+        int lightNav = getResources().getBoolean(R.bool.window_light_navigation_bar) ? WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS : 0;
+        controller.setSystemBarsAppearance(lightStatus | lightNav, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
     }
 
     private void applyWindowInsetsPadding() {
@@ -534,39 +523,7 @@ public class MainActivity extends Activity {
             Thread.currentThread().interrupt();
         }
 
-        appendKsudLogTail(workDir);
         return finished ? process.exitValue() : -1;
-    }
-
-    /**
-     * Show any late-load log lines (root-owned, chmod 644) the binary could
-     * not stream to us before it was killed by the vendor root guard.
-     */
-    private void appendKsudLogTail(File workDir) {
-        File logFile = new File(workDir, ".ghostlock_ksu.log");
-        if (!logFile.isFile()) {
-            return;
-        }
-        List<String> lines = new ArrayList<>();
-        try (BufferedReader r = new BufferedReader(new FileReader(logFile))) {
-            String line;
-            while ((line = r.readLine()) != null) {
-                lines.add(line);
-            }
-        } catch (IOException ignored) {
-            return;
-        }
-        String joined;
-        synchronized (logBuffer) {
-            joined = logBuffer.toString();
-        }
-        for (String line : lines) {
-            String t = line.trim();
-            if (t.isEmpty() || joined.contains(t)) {
-                continue;
-            }
-            appendLog(line);
-        }
     }
 
     private void copyLogs() {
