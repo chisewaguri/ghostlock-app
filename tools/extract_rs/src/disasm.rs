@@ -59,17 +59,32 @@ pub fn disassemble_range(kernel: &[u8], start: usize, stop: usize) -> Result<Vec
     Ok(lines)
 }
 
-/// `sub sp, sp, #0x..` — first explicit frame allocation.
+/// Total stack frame: a preindex `stp x29, x30, [sp, #-0x..]!` plus the first
+/// `sub sp, sp, #0x..` (preindex-only frames supported). Some prologues split
+/// the frame across both forms (e.g. 6.12.58 `do_ipv6_setsockopt`: -0x60 then
+/// -0x260), so counting only the `sub` under-counts them.
 pub fn first_sp_frame(lines: &[String], name: &str) -> Result<u64> {
-    let re = Regex::new(r"(?i)\bsub\s+sp,\s*sp,\s*#0x([0-9a-f]+)").unwrap();
+    let preindex = Regex::new(r"(?i)\bstp\s+x29,\s*x30,\s*\[sp,\s*#-0x([0-9a-f]+)\]!").unwrap();
+    let sub = Regex::new(r"(?i)\bsub\s+sp,\s*sp,\s*#0x([0-9a-f]+)").unwrap();
+    let mut total: u64 = 0;
+    let mut sub_seen = false;
     for line in lines {
-        if let Some(caps) = re.captures(line) {
-            return Ok(u64::from_str_radix(&caps[1], 16).unwrap());
+        if let Some(caps) = preindex.captures(line) {
+            total += u64::from_str_radix(&caps[1], 16).unwrap();
+        }
+        if !sub_seen {
+            if let Some(caps) = sub.captures(line) {
+                total += u64::from_str_radix(&caps[1], 16).unwrap();
+                sub_seen = true;
+            }
         }
     }
-    Err(ExtractError::new(format!(
-        "{name} has no explicit `sub sp,sp,#imm` frame"
-    )))
+    if total == 0 {
+        return Err(ExtractError::new(format!(
+            "{name} has no explicit stack frame (`stp [sp,#-imm]!`/`sub sp,sp,#imm`)"
+        )));
+    }
+    Ok(total)
 }
 
 pub fn has_direct_call(lines: &[String], target: u64) -> bool {
