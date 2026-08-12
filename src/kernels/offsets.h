@@ -11,12 +11,7 @@ struct kernel_offsets {
   int pselect_waiter_shift;
   uint64_t off_init_task, off_init_cred;
   uint64_t off_root_task_group, off_selinux_enforcing;
-  uint64_t off_selinux_blob_sizes, off_security_hook_heads, off_kmalloc_caches;
-  uint64_t off_anon_pipe_buf_ops, off_ashmem_misc_fops, off_ashmem_fops;
-  uint64_t off_ashmem_ioctl, off_ashmem_compat_ioctl, off_ashmem_mmap;
-  uint64_t off_ashmem_open, off_ashmem_release, off_ashmem_show_fdinfo;
-  uint64_t off_configfs_read_iter, off_configfs_bin_write_iter;
-  uint64_t off_copy_splice_read, off_noop_llseek;
+  uint64_t off_selinux_blob_sizes, off_security_hook_heads;
   uint64_t off_slide_nfulnl_logger, off_slide_loggers_0_1, off_slide_boot_id;
 
   /* Per-kernel struct offsets; 0 uses target.h defaults. */

@@ -95,6 +95,8 @@ public class MainActivity extends Activity {
     private static final int COLOR_RED = 0xFFFF6B6B;
     private static final int COLOR_GREEN = 0xFF5FD68A;
     private static final int COLOR_YELLOW = 0xFFFFC94D;
+    private static final int COLOR_BLUE = 0xFF60A5FA;
+    private static final int COLOR_NONE = -1;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -207,7 +209,7 @@ public class MainActivity extends Activity {
      */
     private static CharSequence colorize(String line) {
         int color = markerColor(line);
-        if (color == -1) {
+        if (color == COLOR_NONE) {
             return line;
         }
         SpannableStringBuilder sb = new SpannableStringBuilder(line);
@@ -215,13 +217,48 @@ public class MainActivity extends Activity {
         return sb;
     }
 
+    /**
+     * Marker of the leading "[x] " tag, or 0 if the line has none.
+     */
+    private static char markerOf(String line) {
+        return line.length() > 2 && line.charAt(0) == '[' && line.charAt(2) == ']' ? line.charAt(1) : 0;
+    }
+
+    /**
+     * True for W1/W2/W3 stage round lines (progress or in-round failure).
+     */
+    private static boolean isWriteRound(String msg) {
+        String stage = msg.startsWith("=== ") ? msg.substring(4) : msg;
+        return stage.startsWith("W1") || stage.startsWith("W2") || stage.startsWith("W3") || stage.startsWith("Write 1");
+    }
+
     private static int markerColor(String line) {
-        if (line.startsWith("[+]")) return COLOR_GREEN;
-        if (line.startsWith("[-]") || line.startsWith("[!]")) return COLOR_RED;
-        if (line.startsWith("[*]")) return COLOR_YELLOW;
+        char marker = markerOf(line);
+        /* W-round progress renders blue; in-round failures keep red. */
+        if (isWriteRound(logMessage(line))) {
+            if (marker == '-' || marker == '!') return COLOR_RED;
+            return COLOR_BLUE;
+        }
+        if (marker == '+') return COLOR_GREEN;
+        if (marker == '-' || marker == '!') return COLOR_RED;
+        if (marker == '*') return COLOR_YELLOW;
         if (line.startsWith("error") || line.startsWith("Error")) return COLOR_RED;
         if (line.startsWith("warning")) return COLOR_YELLOW;
-        return -1;
+        return COLOR_NONE;
+    }
+
+    /**
+     * Strip leading "[..] " tags (marker, TIMER) and return the message.
+     */
+    private static String logMessage(String line) {
+        String s = line;
+        while (s.startsWith("[")) {
+            int end = s.indexOf(']');
+            if (end < 0) break;
+            s = s.substring(end + 1);
+            if (s.startsWith(" ")) s = s.substring(1);
+        }
+        return s;
     }
 
     private static String stripAnsi(String input) {
@@ -1237,20 +1274,16 @@ public class MainActivity extends Activity {
 
     private File prepareKsud(File workDir) {
         File out = new File(workDir, KSUD_NAME);
-        List<String> candidates = new ArrayList<>();
+        boolean anyInstalled = false;
         for (String pkg : KSU_MANAGER_PACKAGES) {
+            ApplicationInfo appInfo;
             try {
-                ApplicationInfo appInfo = getPackageManager().getApplicationInfo(pkg, 0);
-                candidates.add(new File(appInfo.nativeLibraryDir, "libksud.so").getAbsolutePath());
+                appInfo = getPackageManager().getApplicationInfo(pkg, 0);
             } catch (PackageManager.NameNotFoundException ignored) {
-                appendLog("KernelSU/ReSukiSU app not installed: " + pkg);
+                continue;
             }
-        }
-        candidates.add("/data/local/tmp/ksud");
-        candidates.add("/data/adb/ksu/bin/ksud");
-
-        for (String path : candidates) {
-            File src = new File(path);
+            anyInstalled = true;
+            File src = new File(appInfo.nativeLibraryDir, "libksud.so");
             if (!src.isFile()) {
                 continue;
             }
@@ -1265,8 +1298,8 @@ public class MainActivity extends Activity {
                 appendLog("copy ksud failed: " + t.getMessage());
             }
         }
-        if (out.isFile()) {
-            return out;
+        if (!anyInstalled) {
+            appendLog("KernelSU/ReSukiSU app not installed");
         }
         return null;
     }

