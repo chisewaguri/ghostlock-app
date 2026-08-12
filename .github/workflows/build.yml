@@ -15,6 +15,9 @@ concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
+env:
+  NDK_VERSION: "29.0.14206865"
+
 jobs:
   build-apk:
     name: Build APK
@@ -37,18 +40,39 @@ jobs:
       - name: Cache NDK
         uses: actions/cache@v4
         with:
-          path: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
-          key: ndk-29.0.14206865-${{ runner.os }}
+          path: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}-${{ runner.os }}
 
       - name: Install NDK
-        run: sdkmanager "ndk;29.0.14206865"
+        run: sdkmanager "ndk;${{ env.NDK_VERSION }}"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tools/extract_rs/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('tools/extract_rs/Cargo.lock') }}
+
+      - name: Test extractor (host)
+        working-directory: tools/extract_rs
+        run: cargo test --release
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
       - name: Build Release APK
         run: |
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          export CC_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang"
+          export AR_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
           ./gradlew :app:assembleRelease --no-daemon
 
       - name: Upload Release APK
