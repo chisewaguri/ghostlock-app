@@ -2,7 +2,29 @@ plugins {
     id 'com.android.application' version '9.3.1' apply false
 }
 
+// ONDK
+def ondkHome() {
+    def env = System.getenv('ONDK_HOME')
+    if (env) {
+        return env
+    }
+    def props = new Properties()
+    def propsFile = rootProject.file('local.properties')
+    if (propsFile.isFile()) {
+        propsFile.withInputStream { props.load(it) }
+    }
+    return props.getProperty('ondk.dir')
+}
+
+def useOndk() {
+    def home = ondkHome()
+    return home != null && !home.isBlank()
+}
+
 def resolveNdkDir() {
+    if (useOndk()) {
+        return ondkHome()
+    }
     def ndkEnv = System.getenv('ANDROID_NDK_HOME') ?: System.getenv('ANDROID_NDK_ROOT')
     if (ndkEnv) {
         return ndkEnv
@@ -41,6 +63,8 @@ def extractNdkTools() {
 tasks.register('buildGhostlockNative', Exec) {
     workingDir rootDir
     commandLine 'make', 'ghostlock'
+    environment 'ANDROID_NDK_HOME', resolveNdkDir()
+    environment 'NDK_ROOT', resolveNdkDir()
     inputs.files(
         fileTree('src') { include '**/*.c', '**/*.h' },
         file('Makefile')
@@ -57,16 +81,28 @@ tasks.register('prepareGhostlockJniLibs', Copy) {
 
 tasks.register('buildGhostlockExtract', Exec) {
     def tools = extractNdkTools()
+    def isOndk = useOndk()
     workingDir rootProject.file('tools/extract_rs')
-    commandLine 'cargo', 'build', '--release', '--target', 'aarch64-linux-android'
+    def cmd = ['cargo']
+    if (isOndk) cmd.add('+ondk')
+    cmd.addAll(['build', '--release', '--target', 'aarch64-linux-android'])
+    if (isOndk) {
+        cmd.addAll(['-Z', 'build-std=std,panic_abort'])
+        cmd.addAll(['-Z', 'build-std-features=optimize_for_size'])
+    }
+    commandLine cmd
     environment 'CC_aarch64_linux_android', tools.clang
     environment 'AR_aarch64_linux_android', tools.ar
     environment 'CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER', tools.clang
+    if (isOndk) {
+        environment 'RUSTC_BOOTSTRAP', '1'
+    }
     inputs.files(
         fileTree('tools/extract_rs/src') { include '**/*.rs' },
         file('tools/extract_rs/Cargo.toml'),
         file('tools/extract_rs/Cargo.lock')
     )
+    inputs.property('useOndk', isOndk)
     outputs.file(file('tools/extract_rs/target/aarch64-linux-android/release/ghostlock-extract'))
 }
 

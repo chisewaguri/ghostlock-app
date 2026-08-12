@@ -21,9 +21,9 @@ SRCS := \
 # Device offsets are selected at runtime from uname -r.
 TARGET_CONFIG ?= target.h
 
-CFLAGS = -O2 -Wall -Wno-unused-parameter -Wno-sign-compare -Wno-unused-function \
+CFLAGS = -O2 -flto -Wall -Wno-unused-parameter -Wno-sign-compare -Wno-unused-function \
   -Isrc/core -Isrc/kernels -DTARGET_CONFIG_H=\"$(TARGET_CONFIG)\"
-LDFLAGS := -fPIE -pie -pthread
+LDFLAGS := -fPIE -pie -pthread -flto
 
 .PHONY: all clean product
 

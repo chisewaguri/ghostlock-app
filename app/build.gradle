@@ -5,6 +5,16 @@ plugins {
 def appName = 'GhostLock'
 def appVersionName = '1.0'
 
+def signingProps = new Properties()
+def signingPropsFile = rootProject.file('local.properties')
+if (signingPropsFile.isFile()) {
+    signingPropsFile.withInputStream { signingProps.load(it) }
+}
+def keystorePath = System.getenv('KEYSTORE_PATH') ?: signingProps.getProperty('KEYSTORE_PATH')
+def keystorePwd = System.getenv('KEYSTORE_PASS') ?: signingProps.getProperty('KEYSTORE_PASS')
+def alias = System.getenv('KEY_ALIAS') ?: signingProps.getProperty('KEY_ALIAS')
+def keyPwd = System.getenv('KEY_PASSWORD') ?: signingProps.getProperty('KEY_PASSWORD')
+
 def gitVersionCode
 try {
     def proc = ['git', 'rev-list', '--count', 'HEAD'].execute(null, project.projectDir)
@@ -142,6 +152,19 @@ tasks.register('generateSupportedKernels') {
 }
 
 android {
+    signingConfigs {
+        if (keystorePath != null && keystorePwd != null && alias != null && keyPwd != null) {
+            release {
+                storeFile file(keystorePath)
+                storePassword keystorePwd
+                keyAlias alias
+                keyPassword keyPwd
+                enableV2Signing true
+                enableV3Signing true
+            }
+        }
+    }
+
     namespace = 'com.ghostlock.app'
     compileSdk {
         version = release(37)
@@ -169,10 +192,17 @@ android {
         release {
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig = signingConfigs.debug
+            if (keystorePath != null) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
         }
         debug {
             minifyEnabled false
+            if (keystorePath != null) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
