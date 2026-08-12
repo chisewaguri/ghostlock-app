@@ -16,10 +16,7 @@ SRCS := \
   src/core/main.c \
   src/core/offsets_json.c \
   src/core/util.c \
-  src/core/slide.c \
-  src/core/fops.c \
-  src/core/pipe.c \
-  src/core/root.c
+  src/core/fops.c
 
 # Device offsets are selected at runtime from uname -r.
 TARGET_CONFIG ?= target.h

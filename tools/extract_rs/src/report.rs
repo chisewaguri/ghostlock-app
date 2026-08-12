@@ -7,9 +7,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 
 use crate::error::{ExtractError, Result};
-use crate::symbols::{
-    ASHMEM_FUNCTIONS, FUNCTIONS, OPTIONAL_SYMBOLS, STRUCT_FIELDS, SYMBOLS,
-};
+use crate::symbols::{OPTIONAL_SYMBOLS, STRUCT_FIELDS, SYMBOLS};
 
 pub const MTK_DEFAULT_PHYS_LOAD: u64 = 0x8000_0000;
 pub const QC_PHYS_LOAD_6_6: u64 = 0xA800_0000;
@@ -22,15 +20,7 @@ pub fn symbol_render_order() -> Vec<&'static str> {
     for (name, _) in SYMBOLS {
         keys.push(*name);
     }
-    for (name, _) in FUNCTIONS {
-        keys.push(*name);
-    }
     keys.push("off_slide_loggers_0_1");
-    keys.push("off_ashmem_fops");
-    keys.push("off_ashmem_misc_fops");
-    for (name, _, _, _) in ASHMEM_FUNCTIONS {
-        keys.push(*name);
-    }
     keys
 }
 

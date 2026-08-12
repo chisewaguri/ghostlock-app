@@ -20,14 +20,10 @@ pub const MTK_DEFAULT_PHYS_LOAD: u64 = 0x8000_0000;
 pub const QC_PHYS_LOAD_6_6: u64 = 0xA800_0000;
 pub const QC_PHYS_LOAD_6_12: u64 = 0xC780_0000;
 
-/// MediaTek boot images store the kernel as an LZ4 legacy frame.
+/// MTK boot kernels are stored as LZ4 legacy frames: a 4-byte magic followed
+/// by size-prefixed blocks, ending once a block decompresses under 8 MiB.
 pub fn decompress_lz4_legacy(payload: &[u8]) -> Result<Vec<u8>> {
-    if payload.len() <= 8 {
-        return Err(ExtractError::new("LZ4 kernel payload too short"));
-    }
-    let out = decompress_lz4_block(&payload[8..], LZ4_MAX_IMAGE).map_err(|err| {
-        ExtractError::new(format!("invalid LZ4-compressed kernel payload: {err}"))
-    })?;
+    let out = decompress_lz4_legacy_frame(payload)?;
     if out.len() < 4 || &out[0..2] != b"MZ" || &out[0x38..0x3C] != b"ARM\x64" {
         return Err(ExtractError::new(
             "LZ4 decompression did not yield an arm64 Image",
@@ -36,9 +32,40 @@ pub fn decompress_lz4_legacy(payload: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Decode an LZ4 block the way the reference C decoder does. MediaTek legacy
-/// streams can end in zero-padding that the reference treats as offset-0
-/// matches (written as zeros); lz4_flex rejects those, so we decode inline.
+fn decompress_lz4_legacy_frame(payload: &[u8]) -> Result<Vec<u8>> {
+    const MAX_BLOCK: usize = 8 * 1024 * 1024;
+    if payload.len() <= 8 || &payload[..4] != LZ4_LEGACY_MAGIC {
+        return Err(ExtractError::new("LZ4 kernel payload too short"));
+    }
+    let mut out = Vec::new();
+    let mut ip = 4usize;
+    while ip + 4 <= payload.len() {
+        let block_len = u32::from_le_bytes(payload[ip..ip + 4].try_into().unwrap()) as usize;
+        ip += 4;
+        if block_len == 0 {
+            break; // trailing zero padding
+        }
+        let end = match ip.checked_add(block_len) {
+            Some(end) if end <= payload.len() => end,
+            _ => return Err(ExtractError::new("truncated LZ4 legacy block")),
+        };
+        let block_out = decompress_lz4_block(&payload[ip..end], MAX_BLOCK).map_err(|err| {
+            ExtractError::new(format!("invalid LZ4-compressed kernel payload: {err}"))
+        })?;
+        ip = end;
+        if out.len().saturating_add(block_out.len()) > LZ4_MAX_IMAGE {
+            return Err(ExtractError::new("LZ4 output exceeds size bound"));
+        }
+        out.extend_from_slice(&block_out);
+        if block_out.len() < MAX_BLOCK {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Decode one LZ4 block like the reference C decoder; lz4_flex rejects the
+/// offset-0 matches MTK legacy streams use as zero padding.
 fn decompress_lz4_block(input: &[u8], max_output: usize) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(input.len().min(max_output));
     let mut ip = 0usize;
@@ -133,6 +160,25 @@ mod tests {
         let out = decompress_lz4_block(&data, 256).expect("reference-compatible decode");
         assert_eq!(out.len(), 25);
         assert!(out.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn lz4_legacy_chunked_stream() {
+        // Regression: legacy frames must be decoded block by block; a single
+        // pass used to break at the 8 MiB block boundary.
+        let sample1: Vec<u8> = (0..(8 << 20)).map(|i| (i % 251) as u8).collect();
+        let sample2: Vec<u8> = (0..(1 << 20)).map(|i| (i * 7 % 251) as u8).collect();
+        let mut frame = LZ4_LEGACY_MAGIC.to_vec();
+        for sample in [&sample1, &sample2] {
+            let block = lz4_flex::block::compress(sample);
+            frame.extend_from_slice(&(block.len() as u32).to_le_bytes());
+            frame.extend_from_slice(&block);
+        }
+        frame.extend_from_slice(&[0u8; 8]); // trailing zero padding
+        let mut expected = sample1;
+        expected.extend_from_slice(&sample2);
+        let out = decompress_lz4_legacy_frame(&frame).expect("chunked frame must decode");
+        assert_eq!(out, expected);
     }
 }
 

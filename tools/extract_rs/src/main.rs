@@ -17,9 +17,7 @@ use ghostlock_extract::kallsyms::Kallsyms;
 use ghostlock_extract::kallsyms_finder;
 use ghostlock_extract::payload;
 use ghostlock_extract::report;
-use ghostlock_extract::symbols::{
-    resolve_structs, resolve_symbols, scan_ashmem_fops, ASHMEM_FUNCTIONS,
-};
+use ghostlock_extract::symbols::{resolve_structs, resolve_symbols};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -223,7 +221,6 @@ fn run(cli: &Cli) -> Result<i32> {
         cli,
     )?;
     let symbols = ks.symbols;
-    let types = ks.types;
 
     let text_base = kallsyms::unique(&symbols, "_text");
     let base = text_base.or_else(|| kallsyms::unique(&symbols, "_head"));
@@ -264,34 +261,7 @@ fn run(cli: &Cli) -> Result<i32> {
         boot.mtk_lz4 || boot.mtk_gzip,
     );
 
-    let mut symbol_offsets =
-        resolve_symbols(&symbols, &types, btf.as_ref(), base, release.as_deref());
-    if symbol_offsets
-        .get("off_ashmem_fops")
-        .copied()
-        .flatten()
-        .is_none()
-    {
-        if let Some(scanned) = scan_ashmem_fops(&boot.kernel, base, &symbol_offsets) {
-            symbol_offsets.insert("off_ashmem_fops".to_string(), Some(scanned));
-            eprintln!(
-                "info: off_ashmem_fops = 0x{scanned:08x} (file_operations pattern scan)"
-            );
-        }
-    }
-    let ashmem_funcs: Vec<u64> = ASHMEM_FUNCTIONS
-        .iter()
-        .filter_map(|(name, _, _, _)| symbol_offsets.get(*name).copied().flatten())
-        .collect();
-    if ashmem_funcs.len() == ASHMEM_FUNCTIONS.len() {
-        let span = ashmem_funcs.iter().max().unwrap() - ashmem_funcs.iter().min().unwrap();
-        if span > 0x4000 {
-            eprintln!(
-                "warning: ashmem functions span 0x{span:x}; expected a tight \
-                 same-module cluster"
-            );
-        }
-    }
+    let mut symbol_offsets = resolve_symbols(&symbols, base);
 
     let mut derived: BTreeMap<String, u64> = BTreeMap::new();
     if !cli.no_disasm {
