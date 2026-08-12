@@ -5,7 +5,9 @@ local.properties
 *.iml
 app/build/
 libghostlock.so
+libextract.so
 build/
 .DS_Store
 __pycache__
 /devices
+target/

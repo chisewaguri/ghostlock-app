@@ -14,6 +14,7 @@ endif
 
 SRCS := \
   src/core/main.c \
+  src/core/offsets_json.c \
   src/core/util.c \
   src/core/slide.c \
   src/core/fops.c \

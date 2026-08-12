@@ -16,6 +16,77 @@ try {
 }
 
 def supportedKernelsSrc = layout.buildDirectory.dir('generated/source/supportedKernels')
+def sharedOffsetsHeader = rootProject.file('src/kernels/offsets.h')
+def offsetFieldRe = /\.([A-Za-z0-9_]+)\s*=\s*(0[xX][0-9A-Fa-f]+|-?\d+)/
+
+def parseOffsetValue = { String text ->
+    if (text.length() > 2 && text.substring(0, 2).equalsIgnoreCase('0x')) {
+        return Long.parseLong(text.substring(2), 16)
+    }
+    return Long.parseLong(text)
+}
+
+def formatOffsetValue = { long value ->
+    value < 0 ? "${value}L" : "0x${Long.toHexString(value)}L"
+}
+
+def escapeJavaString = { String value ->
+    value.replace('\\', '\\\\').replace('"', '\\"')
+}
+
+// STRUCT_OFFSETS_* macros from src/kernels/offsets.h, expanded into field maps.
+def parseStructMacros = { String text ->
+    def macros = [:]
+    def lines = text.readLines()
+    for (int i = 0; i < lines.size(); i++) {
+        def m = lines[i] =~ /#define\s+(STRUCT_OFFSETS_[A-Za-z0-9_]+)\s*(.*)/
+        if (!m.matches()) {
+            continue
+        }
+        def name = m.group(1)
+        def body = m.group(2)
+        while (lines[i].trim().endsWith('\\')) {
+            i++
+            body += ' ' + lines[i]
+        }
+        def fields = [:]
+        def fm = body =~ offsetFieldRe
+        while (fm.find()) {
+            fields[fm.group(1)] = parseOffsetValue(fm.group(2))
+        }
+        macros[name] = fields
+    }
+    macros
+}
+
+// Per-kernel OFFSETS_ENTRY bodies: macro reference plus explicit overrides.
+def parseKernelEntries = { File header, macros ->
+    def text = header.text
+    def names = []
+    def entries = [:]
+    def matcher = text =~ /OFFSETS_ENTRY\(\s*"([^"]+)"/
+    while (matcher.find()) {
+        def release = matcher.group(1)
+        def tail = text.substring(matcher.end())
+        def endIdx = tail.indexOf('\n),')
+        def body = endIdx >= 0 ? tail.substring(0, endIdx) : tail
+        names << release
+        def fields = [:]
+        def macroMatch = body =~ /STRUCT_OFFSETS_[A-Za-z0-9_]+/
+        if (macroMatch.find()) {
+            def base = macros[macroMatch.group()]
+            if (base != null) {
+                fields.putAll(base)
+            }
+        }
+        def fm = body =~ offsetFieldRe
+        while (fm.find()) {
+            fields[fm.group(1)] = parseOffsetValue(fm.group(2))
+        }
+        entries[release] = fields
+    }
+    [names: names, entries: entries]
+}
 
 tasks.register('generateSupportedKernels') {
     def offsets = fileTree(rootProject.projectDir) {
@@ -23,26 +94,45 @@ tasks.register('generateSupportedKernels') {
     }
     def outFile = supportedKernelsSrc.map { it.file('com/ghostlock/app/SupportedKernels.java') }
     inputs.files(offsets)
+    inputs.file(sharedOffsetsHeader)
     outputs.file(outFile)
     doLast {
-        def names = []
+        def macros = parseStructMacros(sharedOffsetsHeader.text)
+        def allNames = []
+        def builtins = [:]
         offsets.each { f ->
-            def matcher = f.text =~ /OFFSETS_ENTRY\(\s*"([^"]+)"/
-            while (matcher.find()) {
-                names << matcher.group(1)
-            }
+            def parsed = parseKernelEntries(f, macros)
+            allNames.addAll(parsed.names)
+            builtins.putAll(parsed.entries)
         }
-        names = names.unique()
+        def names = allNames.unique()
         def sb = new StringBuilder()
         sb << "package com.ghostlock.app;\n\n"
+        sb << "import java.util.Collections;\n"
+        sb << "import java.util.HashMap;\n"
+        sb << "import java.util.Map;\n\n"
         sb << "/** Generated from kernel offset headers; do not edit. */\n"
         sb << "public final class SupportedKernels {\n"
         sb << "    public static final String[] UNAMES = {\n"
         names.each { name ->
-            def escaped = name.replace('\\', '\\\\').replace('"', '\\"')
-            sb << "        \"${escaped}\",\n"
+            sb << "        \"${escapeJavaString(name)}\",\n"
         }
         sb << "    };\n\n"
+        sb << "    /** Built-in release -> field -> value (STRUCT_OFFSETS_* macros expanded). */\n"
+        sb << "    public static final Map<String, Map<String, Long>> BUILTIN = builtin();\n\n"
+        sb << "    private static Map<String, Map<String, Long>> builtin() {\n"
+        sb << "        Map<String, Map<String, Long>> builtin = new HashMap<>();\n"
+        builtins.each { release, fields ->
+            sb << "        {\n"
+            sb << "            Map<String, Long> e = new HashMap<>();\n"
+            fields.each { key, value ->
+                sb << "            e.put(\"${escapeJavaString(key)}\", ${formatOffsetValue(value)});\n"
+            }
+            sb << "            builtin.put(\"${escapeJavaString(release)}\", Collections.unmodifiableMap(e));\n"
+            sb << "        }\n"
+        }
+        sb << "        return Collections.unmodifiableMap(builtin);\n"
+        sb << "    }\n\n"
         sb << "    private SupportedKernels() {}\n"
         sb << "}\n"
         def file = outFile.get().asFile
@@ -102,6 +192,7 @@ android {
 
 tasks.named('preBuild') {
     dependsOn(rootProject.tasks.named('prepareGhostlockJniLibs'))
+    dependsOn(rootProject.tasks.named('prepareGhostlockExtractJniLibs'))
     dependsOn(tasks.named('generateSupportedKernels'))
 }
 

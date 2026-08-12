@@ -7,6 +7,7 @@
 
 #include "common.h"
 #include "offsets.h"
+#include <ctype.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <linux/perf_event.h>
@@ -16,6 +17,9 @@
 #include <strings.h>
 
 const struct kernel_offsets *active_offsets = NULL;
+
+static char g_home_dir[256] = "/data/local/tmp";
+static char g_root_script_path[300] = "/data/local/tmp/.ghostlock_root.sh";
 
 /* MTK loads the kernel at the DRAM base (text_offset=0), Qualcomm via the
  * bootloader; the same uname -r can serve both families, so detect at
@@ -101,7 +105,60 @@ static int soc_is_mtk(void) {
 
 /* Override struct field offsets (task_struct, etc.) with per-device values */
 #include "runtime_struct_offsets.h"
+#include "offsets_json.h"
 
+static struct kernel_offsets g_external_offsets;
+static char g_external_release[192];
+
+/* Publish the active entry's init_cred image address and the physical load
+ * address (MTK always loads at the DRAM base, text_offset=0). */
+static void publish_active_offsets(void) {
+  g_init_cred_image = INIT_CRED;
+  if (active_offsets->kernel_phys_load) {
+    p0_kernel_phys_load = active_offsets->kernel_phys_load;
+  }
+  int mtk = soc_is_mtk();
+  if (mtk) {
+    p0_kernel_phys_load = KIMAGE_TEXT_BASE - MTK_VADDR_BASE;
+  }
+  pr_info("soc: %s; kernel_phys_load=0x%llx\n",
+          mtk ? "mtk" : "qcom/other",
+          (unsigned long long)p0_kernel_phys_load);
+  pr_info("init_cred image=%016zx alias=%016zx\n",
+          (size_t)g_init_cred_image, (size_t)data_addr(g_init_cred_image));
+}
+
+/* Import a matching entry from <home>/offsets.json; returns 0 and activates
+ * the external table on success.  When the release is also registered in the
+ * built-in table, the entry starts from the built-in values so fields the
+ * JSON leaves empty keep the built-in ones instead of falling back to
+ * target.h defaults. */
+static int try_external_offsets(const char *release) {
+  char path[320];
+  snprintf(path, sizeof(path), "%s/offsets.json", g_home_dir);
+  const struct kernel_offsets *builtin = NULL;
+  for (int i = 0; known_offsets[i].uname_r; i++) {
+    if (strcmp(release, known_offsets[i].uname_r) == 0) {
+      builtin = &known_offsets[i];
+      break;
+    }
+  }
+  if (builtin) {
+    g_external_offsets = *builtin;
+  } else {
+    memset(&g_external_offsets, 0, sizeof(g_external_offsets));
+  }
+  int rc = load_offsets_json(path, release, &g_external_offsets,
+                             g_external_release, sizeof(g_external_release));
+  if (rc == 0) {
+    active_offsets = &g_external_offsets;
+    pr_success("offsets imported from offsets.json: %s\n",
+               active_offsets->uname_r);
+  } else {
+    pr_info("no external offsets match at %s\n", path);
+  }
+  return rc;
+}
 static int select_offsets(void) {
   struct utsname uts;
   if (uname(&uts) < 0) return -1;
@@ -113,31 +170,24 @@ static int select_offsets(void) {
     return -1;
   }
 #endif
+  /* Imported offsets win over the built-in tables so refreshed values take
+   * effect without rebuilding the app. */
+  if (try_external_offsets(uts.release) == 0) {
+    publish_active_offsets();
+    return 0;
+  }
   for (int i = 0; known_offsets[i].uname_r; i++) {
     if (strcmp(uts.release, known_offsets[i].uname_r) == 0) {
       active_offsets = &known_offsets[i];
       pr_success("offsets matched: %s\n", active_offsets->uname_r);
-      /* Publish the selected entry's init_cred image address. */
-      g_init_cred_image = INIT_CRED;
-      /* STRUCT_OFFSETS_6_6/6_12 carry the version-selected Qualcomm default;
-       * MTK always loads at the DRAM base (text_offset=0). */
-      if (active_offsets->kernel_phys_load) {
-        p0_kernel_phys_load = active_offsets->kernel_phys_load;
-      }
-      int mtk = soc_is_mtk();
-      if (mtk) {
-        p0_kernel_phys_load = KIMAGE_TEXT_BASE - MTK_VADDR_BASE;
-      }
-      pr_info("soc: %s; kernel_phys_load=0x%llx\n",
-              mtk ? "mtk" : "qcom/other",
-              (unsigned long long)p0_kernel_phys_load);
-      pr_info("init_cred image=%016zx alias=%016zx\n",
-              (size_t)g_init_cred_image, (size_t)data_addr(g_init_cred_image));
+      publish_active_offsets();
       return 0;
     }
   }
   pr_error("no offsets for kernel: %s\n", uts.release);
-  pr_error("add this kernel to offsets.h and rebuild\n");
+  pr_error("add this kernel to offsets.h and rebuild, or import a matching "
+           "offsets.json entry into %s\n",
+           g_home_dir);
   return -1;
 }
 
@@ -381,9 +431,6 @@ static void slab_drain(void) {
     usleep(20000);
   }
 }
-
-static char g_home_dir[256] = "/data/local/tmp";
-static char g_root_script_path[300] = "/data/local/tmp/.ghostlock_root.sh";
 
 int g_core_main = 0;
 int g_core_consumer = 1;
