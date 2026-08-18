@@ -853,6 +853,7 @@ public class MainActivity extends Activity {
         worker.execute(() -> {
             try {
                 File workDir = getFilesDir();
+                new File(workDir, ".ghostlock_ksu.log").delete();
                 File boot = new File(workDir, "boot.img");
                 if (requestCode == REQ_PICK_BOOT) {
                     copyUriToFile(uri, boot);
@@ -1078,6 +1079,7 @@ public class MainActivity extends Activity {
                     throw new IOException("missing native binary: " + binary.getAbsolutePath());
                 }
                 File workDir = getFilesDir();
+                new File(workDir, ".ghostlock_ksu.log").delete();
                 List<String> args = new ArrayList<>();
                 args.add(input);
                 if (xblFile != null) {
@@ -1232,6 +1234,7 @@ public class MainActivity extends Activity {
             int code = 1;
             try {
                 File workDir = getFilesDir();
+                new File(workDir, ".ghostlock_ksu.log").delete();
                 File binary = resolveBinary();
                 File ksud = prepareKsud(workDir);
                 if (ksud != null) {
@@ -1241,21 +1244,64 @@ public class MainActivity extends Activity {
                 }
                 code = runBinary(binary, workDir);
                 appendLog("exit code=" + code);
+                boolean fixupOk = code == 0 && dumpScriptLog(workDir);
+                boolean success = code == 0 && fixupOk;
+                appendLog(success ? "==== done (success) ====" : "==== done (failed) ====");
+                if (success) {
+                    ui.post(() -> setRunState(RunState.SUCCESS));
+                } else {
+                    ui.post(() -> setRunState(RunState.FAILED));
+                }
             } catch (Throwable t) {
                 appendLog("error: " + t.getClass().getSimpleName() + ": " + t.getMessage());
+                ui.post(() -> setRunState(RunState.FAILED));
             } finally {
-                int finalCode = code;
                 ui.post(() -> {
                     running.set(false);
                     getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                    if (finalCode == 0) {
-                        setRunState(RunState.SUCCESS);
-                    } else {
-                        setRunState(RunState.FAILED);
-                    }
                 });
             }
         });
+    }
+
+    /**
+     * dump the root shell log into the ui and report whether the policy fixup
+     * succeeded (seen restoring enforcing, not fixup failed).
+     */
+    private boolean dumpScriptLog(File workDir) {
+        File log = new File(workDir, ".ghostlock_ksu.log");
+        // brief wait for the log to appear
+        for (int i = 0; i < 3; i++) {
+            if (log.isFile()) break;
+            try { Thread.sleep(500); } catch (InterruptedException e) { return false; }
+        }
+        if (!log.isFile()) return false;
+        // read once, check for marker
+        String marker = null;
+        try (BufferedReader reader = new BufferedReader(new FileReader(log))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.contains("restoring enforcing")) marker = "ok";
+                if (line.contains("fixup failed")) marker = "fail";
+            }
+        } catch (IOException ignored) {
+        }
+        dumpScriptLogLines(log);
+        if ("ok".equals(marker)) return true;
+        if ("fail".equals(marker)) return false;
+        // no marker yet — script still running or hung; dont wait
+        return false;
+    }
+
+    private void dumpScriptLogLines(File log) {
+        appendLog("---- .ghostlock_ksu.log ----");
+        try (BufferedReader reader = new BufferedReader(new FileReader(log))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                appendLog(line);
+            }
+        } catch (IOException ignored) {
+        }
     }
 
     private void setRunState(RunState state) {
