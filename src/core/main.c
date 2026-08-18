@@ -743,13 +743,10 @@ static void child_main(struct child_pipes *p) {
     _exit(1);
   }
   if (worker < 0) { close(p->uid_w); _exit(1); }
-  /* Wait for the root script to finish instead of detaching.  The parent
-   * already has a 300s timeout, and the script finishes in ~20s, so the
-   * exit code tells the Java side exactly what happened — no polling. */
-  int wst = 0;
-  waitpid(worker, &wst, 0);
+  /* Detach: root script runs in background, binary exits fast.
+   * Java reads the log to check the result — no polling needed. */
   close(p->uid_w);
-  _exit(WIFEXITED(wst) ? WEXITSTATUS(wst) : 1);
+  _exit(0);
 }
 
 static pid_t spawn_child(struct child_pipes *p) {
