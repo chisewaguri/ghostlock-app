@@ -19,9 +19,22 @@ struct kernel_offsets {
   uint32_t task_pi_lock, task_pi_waiters, task_pi_top_task, task_pi_blocked_on;
   uint32_t task_pid, task_tgid, task_atomic_flags;
   uint32_t task_real_cred, task_cred, task_comm, task_tasks, task_seccomp;
+
+  /* rt_mutex_waiter layout: 0 = 6.6 rb_node, 1 = 6.1 compact tree_entry */
+  uint8_t compact_waiter;
+  uint8_t _pad[7];
 };
 
 #define OFFSETS_ENTRY(uname, ...) { .uname_r = uname, __VA_ARGS__ }
+
+#define STRUCT_OFFSETS_6_1                                                     \
+  .task_prio = 0x84, .task_normal_prio = 0x8C, .task_sched_task_group = 0x348, \
+  .task_pi_lock = 0x924, .task_pi_waiters = 0x938,                             \
+  .task_pi_top_task = 0x948, .task_pi_blocked_on = 0x950,                      \
+  .task_pid = 0x630, .task_tgid = 0x634,                                       \
+  .task_atomic_flags = 0x5F0, .task_real_cred = 0x830, .task_cred = 0x838,     \
+  .task_comm = 0x848, .task_tasks = 0x550, .task_seccomp = 0x900,              \
+  .compact_waiter = 1
 
 #define STRUCT_OFFSETS_6_12                                                    \
   .task_prio = 0x94, .task_normal_prio = 0x9C, .task_sched_task_group = 0x420, \
@@ -43,6 +56,7 @@ struct kernel_offsets {
 
 static const struct kernel_offsets known_offsets[] = {
 /* Add new kernels by creating src/kernels/<uname-release>/offsets.h */
+#include "6.1.138-android14-11-g0c3d559bcd85-ab14529422/offsets.h"
 #include "6.6.30-android15-8-g54dcbfbef792-ab12368803-4k/offsets.h"
 #include "6.6.77-android15-8-g4a507830d890-ab13636293-4k/offsets.h"
 #include "6.6.77-android15-8-g63ce7556864c-ab13994517-4k/offsets.h"
@@ -50,7 +64,6 @@ static const struct kernel_offsets known_offsets[] = {
 #include "6.6.89-android15-8-g096cdb6ecefc-ab14358676-4k/offsets.h"
 #include "6.6.89-android15-8-g0889fe95bb10-ab14402178-4k/offsets.h"
 #include "6.6.89-android15-8-gf4dc45704e54-abogki446052083-4k/offsets.h"
-#include "6.6.92-android15-8-g3637f4904cf5-ab13944661-4k/offsets.h"
 #include "6.6.102-android15-8-gb01b41c2647c-ab15574720-4k/offsets.h"
 #include "6.6.102-android15-8-gfe76d1bc97fd-ab14689815-4k/offsets.h"
 #include "6.6.118-android15-8-g2e6b9c3812c5-ab15114928-4k/offsets.h"

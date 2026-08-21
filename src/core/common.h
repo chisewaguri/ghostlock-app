@@ -79,10 +79,19 @@ extern int g_core_consumer;
 #define PSELECT_CONSUMER_BURST_CALLS 1
 #define PSELECT_CONSUMER_SETTLE_USEC 250000
 #define PSELECT_ENTER_DELAY_USEC 50000
+/* Timeout per waiter layout. 6.6 (select) keeps the proven {0, 200ms}.
+ * 6.1 compact (pselect) uses {1, 0} — the long window guarantees the
+ * consumer's 50ms enter delay always lands inside the pselect call even
+ * when crafted fd bits make it return early (RMG slide_app.c behavior,
+ * device-proven). The pselect path below re-derives these from
+ * the active offsets; the macros remain the 6.6 defaults so that route
+ * is untouched. */
 #ifndef PSELECT_TIMEOUT_SEC
 #define PSELECT_TIMEOUT_SEC 0
 #endif
+#ifndef PSELECT_TIMEOUT_USEC
 #define PSELECT_TIMEOUT_USEC 200000
+#endif
 #ifndef ROUTE_WAIT_SECONDS
 #define ROUTE_WAIT_SECONDS 1
 #endif

