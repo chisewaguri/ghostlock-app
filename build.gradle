@@ -90,10 +90,30 @@ tasks.register('buildGhostlockExtract', Exec) {
         cmd.addAll(['-Z', 'build-std=std,panic_abort'])
         cmd.addAll(['-Z', 'build-std-features=optimize_for_size'])
     }
+    // windows without MSVC: the msvc toolchain can't link host build
+    // scripts. use the gnu toolchain with the NDK bin on PATH (clang for
+    // cc-rs, llvm-dlltool aliased as dlltool.exe in there).
+    def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
+    def gnuTc = 'stable-x86_64-pc-windows-gnu'
+    def hasGnu = false
+    if (isWindows && !isOndk) {
+        def proc = ['rustup', 'run', gnuTc, 'rustc', '--version'].execute(null, rootDir)
+        hasGnu = proc.waitFor() == 0
+    }
+    if (hasGnu) {
+        cmd.clear()
+        cmd.addAll(['rustup', 'run', gnuTc, 'cargo', 'build', '--release',
+                    '--target', 'aarch64-linux-android'])
+    }
     commandLine cmd
     environment 'CC_aarch64_linux_android', tools.clang
     environment 'AR_aarch64_linux_android', tools.ar
     environment 'CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER', tools.clang
+    if (hasGnu) {
+        def binDir = new File(tools.clang).getParentFile().absolutePath
+        environment 'PATH', binDir + File.pathSeparator + System.getenv('PATH')
+        environment 'CC_aarch64_linux_android', binDir + '\\clang.exe'
+    }
     if (isOndk) {
         environment 'RUSTC_BOOTSTRAP', '1'
     }
