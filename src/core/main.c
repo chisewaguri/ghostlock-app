@@ -217,7 +217,11 @@ void *waiter_thread(void *arg __attribute__((unused))) {
   timeout.tv_sec += ROUTE_WAIT_SECONDS;
   atomic_store(&waiter_waiting, 1);
   futex_op(&f_wait, FUTEX_WAIT_REQUEUE_PI, 0, &timeout, &f_pi_target, 0);
-  do_pselect_fake_lock_route();
+  if (tcp_route_selected()) {
+    do_tcp_fake_lock_route();
+  } else {
+    do_pselect_fake_lock_route();
+  }
   atomic_store(&route_done, 1);
   futex_op(&f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
   while (!atomic_load(&owner_chain_done)) usleep(1000);
