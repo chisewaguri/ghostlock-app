@@ -212,6 +212,17 @@ void reset_main_route_state(void);
 int run_main_route_threads(void);
 void set_pselect_write_mode(uintptr_t target, int mode);
 
+/* cfi/configfs post-race write layer (cfi.c). */
+extern uintptr_t g_binwrite_target;
+int cfi_symbols_present(void);
+int cfi_acquired(void);
+uintptr_t cfi_plant_text_addr(uintptr_t off);
+int cfi_try_acquire(void);
+int cfi_stage_selinux_off(void);
+int cfi_patch_child_cred(uintptr_t child_task);
+int cfi_stage_seccomp_clear(uintptr_t child_task);
+void cfi_release(void);
+
 #include "runtime_struct_offsets.h"
 
 #endif

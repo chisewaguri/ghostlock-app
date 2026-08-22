@@ -43,6 +43,33 @@ extern const struct kernel_offsets *active_offsets;
 #define SLIDE_SYSCTL_BOOTID_IMAGE \
   _RSO_IMAGE(off_slide_boot_id, SLIDE_SYSCTL_BOOTID_OFF)
 
+/* cfi/configfs layer: offsets into the kernel image (0 = missing entry). */
+#undef NOOP_LLSEEK_OFF
+#undef CONFIGFS_READ_ITER_OFF
+#undef CONFIGFS_BIN_WRITE_ITER_OFF
+#undef ASHMEM_IOCTL_OFF
+#undef ASHMEM_FOPS_OFF
+#undef ASHMEM_MISC_FOPS_OFF
+
+#define NOOP_LLSEEK_OFF         _RSO_64(off_noop_llseek, 0)
+#define CONFIGFS_READ_ITER_OFF  _RSO_64(off_configfs_read_iter, 0)
+#define CONFIGFS_BIN_WRITE_ITER_OFF _RSO_64(off_configfs_bin_write_iter, 0)
+#define ASHMEM_IOCTL_OFF        _RSO_64(off_ashmem_ioctl, 0)
+#define ASHMEM_FOPS_OFF         _RSO_64(off_ashmem_fops, 0)
+#define ASHMEM_MISC_FOPS_OFF    _RSO_64(off_ashmem_misc_fops, 0)
+
+/* cred layout: 6.1 KMI puts uid@4/caps@40/security@120; the target.h
+ * fallbacks are the 6.6 GKI values. */
+#undef CRED_UID_OFF
+#undef CRED_SECUREBITS_OFF
+#undef CRED_CAPS_OFF
+#undef CRED_SECURITY_OFF
+
+#define CRED_UID_OFF       _RSO(cred_uid, 8)
+#define CRED_SECUREBITS_OFF _RSO(cred_securebits, 40)
+#define CRED_CAPS_OFF      _RSO(cred_caps, 48)
+#define CRED_SECURITY_OFF  _RSO(cred_security, 128)
+
 #undef FAKE_TASK_PRIO_OFF
 #undef FAKE_TASK_NORMAL_PRIO_OFF
 #undef FAKE_TASK_TASK_GROUP_OFF

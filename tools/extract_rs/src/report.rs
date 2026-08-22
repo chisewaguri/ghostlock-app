@@ -21,6 +21,7 @@ pub fn symbol_render_order() -> Vec<&'static str> {
         keys.push(*name);
     }
     keys.push("off_slide_loggers_0_1");
+    keys.push("off_ashmem_misc_fops");
     keys
 }
 
@@ -131,6 +132,13 @@ pub fn render_device(
             lines.push(format!("    .{key} = 0x{value:08x},"));
         }
     }
+    // cred layout is KMI-dependent (6.1 uid@4 vs 6.6 uid@8); emit whenever
+    // BTF resolves it so entries never rely on target.h fallbacks.
+    for key in ["cred_uid", "cred_securebits", "cred_caps", "cred_security"] {
+        if let Some(value) = structs.get(key).copied().flatten() {
+            lines.push(format!("    .{key} = 0x{value:x},"));
+        }
+    }
     lines.push("),".to_string());
     let mut reference: Vec<(&str, u32)> = Vec::new();
     for key in struct_render_order() {
@@ -204,6 +212,11 @@ pub fn render_c(
     for key in symbol_render_order() {
         if let Some(value) = symbols.get(key).copied().flatten() {
             lines.push(format!("  .{key}=0x{value:08X},"));
+        }
+    }
+    for key in ["cred_uid", "cred_securebits", "cred_caps", "cred_security"] {
+        if let Some(value) = structs.get(key).copied().flatten() {
+            lines.push(format!("  .{key}=0x{value:X},"));
         }
     }
     lines.push("),".to_string());

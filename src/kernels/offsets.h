@@ -14,6 +14,14 @@ struct kernel_offsets {
   uint64_t off_selinux_blob_sizes, off_security_hook_heads;
   uint64_t off_slide_nfulnl_logger, off_slide_loggers_0_1, off_slide_boot_id;
 
+  /* cfi/configfs write layer (tcp route): 0 = symbol missing from this
+   * kernel's kallsyms, tcp route disabled at runtime. */
+  uint64_t off_noop_llseek, off_configfs_read_iter, off_configfs_bin_write_iter;
+  uint64_t off_ashmem_ioctl, off_ashmem_fops, off_ashmem_misc_fops;
+
+  /* cred layout (BTF): 0 uses target.h defaults. */
+  uint32_t cred_uid, cred_securebits, cred_caps, cred_security;
+
   /* Per-kernel struct offsets; 0 uses target.h defaults. */
   uint32_t task_prio, task_normal_prio, task_sched_task_group;
   uint32_t task_pi_lock, task_pi_waiters, task_pi_top_task, task_pi_blocked_on;
@@ -38,7 +46,8 @@ struct kernel_offsets {
   .task_pid = 0x630, .task_tgid = 0x634,                                       \
   .task_atomic_flags = 0x5F0, .task_real_cred = 0x830, .task_cred = 0x838,     \
   .task_comm = 0x848, .task_tasks = 0x550, .task_seccomp = 0x900,              \
-  .compact_waiter = 1, .mm_struct_sz = 0x400
+  .compact_waiter = 1, .mm_struct_sz = 0x400,                                  \
+  .cred_uid = 4, .cred_securebits = 36, .cred_caps = 40, .cred_security = 120
 
 #define STRUCT_OFFSETS_6_12                                                    \
   .task_prio = 0x94, .task_normal_prio = 0x9C, .task_sched_task_group = 0x420, \

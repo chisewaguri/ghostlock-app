@@ -13,6 +13,13 @@ OFFSETS_ENTRY(
     .off_slide_nfulnl_logger = 0x01fd29c8,
     .off_slide_boot_id = 0x02239458,
     .off_slide_loggers_0_1 = 0x01fd2918,
+    .off_noop_llseek = 0x0039437c,
+    .off_configfs_read_iter = 0x0045f3dc,
+    .off_configfs_bin_write_iter = 0x0045f90c,
+    .off_ashmem_ioctl = 0x00c28c34,
+    .off_ashmem_fops = 0x0126bf80,
+    /* ashmem_misc (this kernel's name) + offsetof(miscdevice, fops). */
+    .off_ashmem_misc_fops = 0x0213b638,
 ),
 
 /* BTF reference (runtime uses target.h defaults): */

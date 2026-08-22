@@ -189,6 +189,12 @@ static const struct {
   {"off_slide_nfulnl_logger", offsetof(struct kernel_offsets, off_slide_nfulnl_logger)},
   {"off_slide_loggers_0_1", offsetof(struct kernel_offsets, off_slide_loggers_0_1)},
   {"off_slide_boot_id", offsetof(struct kernel_offsets, off_slide_boot_id)},
+  {"off_noop_llseek", offsetof(struct kernel_offsets, off_noop_llseek)},
+  {"off_configfs_read_iter", offsetof(struct kernel_offsets, off_configfs_read_iter)},
+  {"off_configfs_bin_write_iter", offsetof(struct kernel_offsets, off_configfs_bin_write_iter)},
+  {"off_ashmem_ioctl", offsetof(struct kernel_offsets, off_ashmem_ioctl)},
+  {"off_ashmem_fops", offsetof(struct kernel_offsets, off_ashmem_fops)},
+  {"off_ashmem_misc_fops", offsetof(struct kernel_offsets, off_ashmem_misc_fops)},
 };
 
 static const struct {
@@ -210,6 +216,10 @@ static const struct {
   {"task_comm", offsetof(struct kernel_offsets, task_comm)},
   {"task_tasks", offsetof(struct kernel_offsets, task_tasks)},
   {"task_seccomp", offsetof(struct kernel_offsets, task_seccomp)},
+  {"cred_uid", offsetof(struct kernel_offsets, cred_uid)},
+  {"cred_securebits", offsetof(struct kernel_offsets, cred_securebits)},
+  {"cred_caps", offsetof(struct kernel_offsets, cred_caps)},
+  {"cred_security", offsetof(struct kernel_offsets, cred_security)},
 };
 
 /* Fill `out` from one JSON object [obj, end).  Fields absent from the JSON
