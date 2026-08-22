@@ -69,10 +69,10 @@ pub fn phys_needs_override(release: Option<&str>, phys: Option<u64>) -> bool {
 }
 
 pub fn pselect_waiter_shift_for(release: Option<&str>) -> i64 {
-    if crate::symbols::kernel_struct_macro(release) == "STRUCT_OFFSETS_6_12" {
-        0
-    } else {
-        -2
+    match crate::symbols::kernel_struct_macro(release) {
+        "STRUCT_OFFSETS_6_12" => 0,
+        "STRUCT_OFFSETS_6_1" => -2,
+        _ => -2,
     }
 }
 
@@ -123,6 +123,8 @@ pub fn render_device(
     if phys_needs_override(Some(release), phys) {
         lines.push(format!("    .kernel_phys_load = 0x{:x},", phys.unwrap()));
     }
+    // 6.1 entries get their mm_struct_sz=0x400 stride from the
+    // STRUCT_OFFSETS_6_1 macro itself; nothing extra to emit here.
     lines.push(format!("    .pselect_waiter_shift = {pselect_shift},"));
     for key in symbol_render_order() {
         if let Some(value) = symbols.get(key).copied().flatten() {
