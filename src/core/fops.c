@@ -232,7 +232,7 @@ void do_pselect_fake_lock_route(void) {
      * a pselect that never becomes ready. */
     struct timespec ts = {
       .tv_sec = PSELECT_TIMEOUT_SEC,
-      .tv_nsec = PSELECT_TIMEOUT_USEC,
+      .tv_nsec = (long)PSELECT_TIMEOUT_USEC * 1000,
     };
     ret = pselect(PSELECT_ROUTE_NFDS, &in, &out, &ex, &ts, NULL);
   } else {
