@@ -47,6 +47,7 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
     private val cpuPairLabels = mutableListOf<String>()
     private var selectedCpuPair = 0
     private var safeModeEnabled = false
+    private var tcpRouteEnabled = true
     private var pendingParsedEntries: JSONArray? = null
 
     init {
@@ -63,6 +64,8 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
         cpuPairLabels = cpuPairLabels.toList(),
         selectedCpuPair = selectedCpuPair,
         safeModeEnabled = safeModeEnabled,
+        tcpRouteEnabled = tcpRouteEnabled,
+        compact = isCompactKernel(),
     )
 
     override fun selectCpuPair(index: Int) {
@@ -76,6 +79,10 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
 
     override fun setSafeModeEnabled(enabled: Boolean) {
         safeModeEnabled = enabled
+    }
+
+    override fun setTcpRouteEnabled(enabled: Boolean) {
+        tcpRouteEnabled = enabled
     }
 
     override suspend fun exportCandidates(): List<OffsetCandidate> {
@@ -249,6 +256,7 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
                         environment()["GHOSTLOCK_CONSUMER_CORE"] = pair.consumer.toString()
                     }
                     if (safeModeEnabled) environment()["GHOSTLOCK_DISABLE_MODULES"] = "1"
+                    if (!tcpRouteEnabled) environment()["GHOSTLOCK_TCP_ROUTE"] = "0"
                 }
             try {
                 runProcess(command, onLog = {}, captureOutput = false)
@@ -365,6 +373,17 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
     private fun isKernelSupported(): Boolean {
         val version = System.getProperty("os.version", "").orEmpty()
         return version in SupportedKernels.UNAMES || importedOffsetsMatch(version)
+    }
+
+    private fun isCompactKernel(): Boolean {
+        val version = System.getProperty("os.version", "").orEmpty()
+        SupportedKernels.BUILTIN[version]?.get("compact_waiter")?.takeIf { it != 0L }?.let { return true }
+        val entries = readOffsetsFile(offsetsFile) ?: return false
+        for (index in 0 until entries.length()) {
+            val entry = entries.optJSONObject(index) ?: continue
+            if (entry.optString("release", "") == version && entry.optLong("compact_waiter", 0L) != 0L) return true
+        }
+        return false
     }
 
     private fun importedOffsetsMatch(version: String): Boolean {
