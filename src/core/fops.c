@@ -16,7 +16,7 @@ int route_last_errno;
  * zc words overlap the stale waiter; zc[0x28] is waiter->task, zc[0x30]
  * waiter->lock. */
 #define TCP_PUNCH_SHMEM_LEN (16 * 1024 * 1024)
-#define TCP_ROUTE_ATTEMPTS 2000
+#define TCP_ROUTE_ATTEMPTS 128
 #define TCP_ARM_SEQ 16
 #define TCP_POST_GETSOCKOPT_HOLD 20000
 /* compact pselect retry */
