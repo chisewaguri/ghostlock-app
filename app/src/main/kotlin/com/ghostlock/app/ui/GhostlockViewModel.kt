@@ -90,6 +90,16 @@ class GhostlockViewModel(
         mutableState.update { it.copy(tcpRouteEnabled = enabled) }
     }
 
+    fun toggleShizuku(enabled: Boolean) {
+        repository.setShizukuEnabled(enabled)
+        mutableState.update { it.copy(shizukuEnabled = enabled, shizukuStatus = null) }
+        viewModelScope.launch { refreshSnapshot() }
+    }
+
+    fun refresh() {
+        viewModelScope.launch { refreshSnapshot() }
+    }
+
     fun onRun() {
         val snapshot = kernelSnapshot ?: return
         if (!snapshot.kernelSupported) {
@@ -238,6 +248,8 @@ class GhostlockViewModel(
                 safeModeEnabled = snapshot.safeModeEnabled,
                 tcpRouteEnabled = snapshot.tcpRouteEnabled,
                 compact = snapshot.compact,
+                shizukuEnabled = snapshot.shizukuEnabled,
+                shizukuStatus = snapshot.shizukuStatus,
                 exportVisible = canExport,
             )
         }
