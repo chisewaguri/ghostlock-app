@@ -45,6 +45,13 @@ class MainActivity : ComponentActivity() {
         setupSystemBars()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // the shizuku grant dialog is another activity, so the status it changes
+        // is only visible once this one comes back
+        viewModel.refresh()
+    }
+
     private fun handleEffect(effect: GhostlockEffect) {
         when (effect) {
             is GhostlockEffect.PickDocument -> {
@@ -119,6 +126,7 @@ private fun GhostlockRoute(
             override fun onCpuPairSelected(index: Int) = viewModel.selectCpuPair(index)
             override fun onSafeModeChanged(enabled: Boolean) = viewModel.toggleSafeMode(enabled)
             override fun onTcpRouteChanged(enabled: Boolean) = viewModel.toggleTcpRoute(enabled)
+            override fun onShizukuChanged(enabled: Boolean) = viewModel.toggleShizuku(enabled)
             override fun onDialogItemSelected(index: Int) = viewModel.onDialogItemSelected(index)
             override fun onDialogInputChange(value: String) = viewModel.onDialogInputChange(value)
             override fun onDialogConfirm(value: String) = viewModel.onDialogConfirm(value)
