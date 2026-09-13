@@ -248,7 +248,7 @@ class GhostlockViewModel(
                 cpuPairIndex = snapshot.selectedCpuPair,
                 safeModeEnabled = snapshot.safeModeEnabled,
                 tcpRouteEnabled = snapshot.tcpRouteEnabled,
-                compact = snapshot.compact,
+                tcpRouteSelectable = snapshot.tcpRouteSelectable,
                 shizukuEnabled = snapshot.shizukuEnabled,
                 shizukuStatus = snapshot.shizukuStatus,
                 exportVisible = canExport,
