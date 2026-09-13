@@ -15,7 +15,12 @@ data class KernelSnapshot(
     val safeModeEnabled: Boolean,
     val tcpRouteEnabled: Boolean,
     val compact: Boolean,
+    val shizukuEnabled: Boolean = false,
+    /** null while the shizuku route is off. */
+    val shizukuStatus: ShizukuStatus? = null,
 )
+
+enum class ShizukuStatus { READY, NOT_INSTALLED, NOT_RUNNING, TOO_OLD, NO_PERMISSION }
 
 enum class LogTone { Default, Error, Success, Warning, Progress }
 
