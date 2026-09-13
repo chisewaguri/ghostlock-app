@@ -14,6 +14,7 @@ import com.ghostlock.app.domain.model.KernelSnapshot
 import com.ghostlock.app.domain.model.OffsetCandidate
 import com.ghostlock.app.domain.model.OffsetImportResult
 import com.ghostlock.app.domain.model.ParseResult
+import com.ghostlock.app.domain.model.ShizukuStatus
 import com.ghostlock.app.domain.model.SupportedKernels
 import com.ghostlock.app.domain.repository.GhostlockRepository
 import com.ghostlock.app.domain.usecase.OffsetMatching
@@ -48,6 +49,7 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
     private var selectedCpuPair = 0
     private var safeModeEnabled = false
     private var tcpRouteEnabled = true
+    private var shizukuEnabled = false
     private var pendingParsedEntries: JSONArray? = null
 
     init {
@@ -66,6 +68,8 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
         safeModeEnabled = safeModeEnabled,
         tcpRouteEnabled = tcpRouteEnabled,
         compact = isCompactKernel(),
+        shizukuEnabled = shizukuEnabled,
+        shizukuStatus = if (shizukuEnabled) ShizukuRunner.status(appContext) else null,
     )
 
     override fun selectCpuPair(index: Int) {
@@ -83,6 +87,11 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
 
     override fun setTcpRouteEnabled(enabled: Boolean) {
         tcpRouteEnabled = enabled
+    }
+
+    override fun setShizukuEnabled(enabled: Boolean) {
+        shizukuEnabled = enabled
+        if (enabled) ShizukuRunner.requestPermission()
     }
 
     override suspend fun exportCandidates(): List<OffsetCandidate> {
@@ -221,7 +230,25 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
         return try {
             val binary = File(appContext.applicationInfo.nativeLibraryDir, "libghostlock.so")
             require(binary.isFile) { "missing native binary: ${binary.absolutePath}" }
-            if (prepareKsud(workDir, onLog) != null) onLog("ksud ready") else onLog("warning: ksud not found")
+            val ksud = prepareKsud(workDir, onLog)
+            if (ksud != null) onLog("ksud ready") else onLog("warning: ksud not found")
+            if (shizukuEnabled) {
+                // no fallback: a second chain over a half-run one is what corrupts data
+                val status = ShizukuRunner.status(appContext)
+                if (status != ShizukuStatus.READY) {
+                    onLog("[-] shizuku $status")
+                    return 1
+                }
+                return ShizukuRunner.run(
+                    binary = binary,
+                    ksud = ksud,
+                    offsets = offsetsFile,
+                    pair = pair,
+                    safeMode = safeModeEnabled,
+                    tcpRoute = tcpRouteEnabled,
+                    onLog = onLog,
+                )
+            }
             // the root script creates its log as root, so one name per run
             // keeps the last run's lines out of this run's log
             val ksuLog = File(workDir, "$KsuLogName.${System.currentTimeMillis()}")
