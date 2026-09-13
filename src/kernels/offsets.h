@@ -9,6 +9,10 @@ struct kernel_offsets {
   uint64_t kernel_phys_load;
   /* pselect fd_set waiter word shift; 0 uses target.h default. */
   int pselect_waiter_shift;
+  /* Multicast option-buffer waiter offset; 0 disables the mcast route. */
+  int mcast_waiter_off;
+  /* setsockopt option buffer that covers the stale waiter. */
+  uint32_t mcast_buffer_size, mcast_task_offset, mcast_lock_offset;
   uint64_t off_init_task, off_init_cred;
   uint64_t off_root_task_group, off_selinux_enforcing;
   uint64_t off_selinux_blob_sizes, off_security_hook_heads;

