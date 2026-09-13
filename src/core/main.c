@@ -294,9 +294,14 @@ void *consumer_thread(void *arg __attribute__((unused))) {
                                 ? (calls_this_seq % 19) + 1
                                 : PSELECT_CONSUMER_NICE;
         long sched_ret = sched_setattr_tid(tid, consumer_nice);
+        int setattr_errno = errno;
+        pr_info("consumer call tid=%d nice=%d ret=%ld errno=%d\n",
+                tid, consumer_nice, sched_ret, sched_ret ? setattr_errno : 0);
         if (sched_ret != 0) {
           struct timespec ft = {.tv_sec = 0, .tv_nsec = 50000000};
           long fret = futex_op(&f_pi_target, FUTEX_LOCK_PI, 0, &ft, NULL, 0);
+          pr_info("consumer fallback lock_pi ret=%ld errno=%d\n",
+                  fret, fret ? errno : 0);
           if (fret == 0) {
             futex_op(&f_pi_target, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
             sched_ret = 0;
