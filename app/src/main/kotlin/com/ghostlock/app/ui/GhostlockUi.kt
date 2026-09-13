@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ghostlock.app.BuildConfig
 import com.ghostlock.app.R
+import com.ghostlock.app.domain.model.ShizukuStatus
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -103,6 +104,8 @@ data class GhostlockUiState(
     val safeModeEnabled: Boolean = false,
     val tcpRouteEnabled: Boolean = true,
     val compact: Boolean = false,
+    val shizukuEnabled: Boolean = false,
+    val shizukuStatus: ShizukuStatus? = null,
     val executionSheetVisible: Boolean = false,
     val executionSheetDismissible: Boolean = false,
     val dialogVisible: Boolean = false,
@@ -135,6 +138,7 @@ interface GhostlockActions {
     fun onCpuPairSelected(index: Int)
     fun onSafeModeChanged(enabled: Boolean)
     fun onTcpRouteChanged(enabled: Boolean)
+    fun onShizukuChanged(enabled: Boolean)
     fun onDialogItemSelected(index: Int)
     fun onDialogInputChange(value: String)
     fun onDialogConfirm(value: String)
@@ -563,6 +567,23 @@ private fun ControlPanel(
                 onCheckedChange = actions::onSafeModeChanged,
                 title = stringResource(R.string.safe_mode_label),
                 summary = stringResource(R.string.safe_mode_summary),
+            )
+        }
+        Card(modifier = modifier.padding(top = 12.dp)) {
+            SwitchPreference(
+                checked = state.shizukuEnabled,
+                onCheckedChange = actions::onShizukuChanged,
+                title = stringResource(R.string.shizuku_label),
+                summary = stringResource(
+                    when {
+                        !state.shizukuEnabled -> R.string.shizuku_summary_off
+                        state.shizukuStatus == ShizukuStatus.READY -> R.string.shizuku_summary_on
+                        state.shizukuStatus == ShizukuStatus.NOT_INSTALLED -> R.string.shizuku_status_not_installed
+                        state.shizukuStatus == ShizukuStatus.TOO_OLD -> R.string.shizuku_status_too_old
+                        state.shizukuStatus == ShizukuStatus.NO_PERMISSION -> R.string.shizuku_status_no_permission
+                        else -> R.string.shizuku_status_not_running
+                    }
+                ),
             )
         }
         if (state.compact) {

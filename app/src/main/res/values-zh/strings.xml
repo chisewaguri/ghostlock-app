@@ -55,4 +55,11 @@
     <string name="tcp_route_label">利用路径</string>
     <string name="tcp_route_summary_on">TCP 零拷贝</string>
     <string name="tcp_route_summary_off">pselect</string>
+    <string name="shizuku_label">通过 Shizuku 执行</string>
+    <string name="shizuku_summary_off">在应用进程内执行</string>
+    <string name="shizuku_summary_on">shell uid，无 seccomp</string>
+    <string name="shizuku_status_not_installed">未安装 Shizuku</string>
+    <string name="shizuku_status_not_running">请先启动 Shizuku，再回到本应用</string>
+    <string name="shizuku_status_too_old">需要 Shizuku 11 或更高版本</string>
+    <string name="shizuku_status_no_permission">请在弹窗中授予 Shizuku 权限</string>
 </resources>

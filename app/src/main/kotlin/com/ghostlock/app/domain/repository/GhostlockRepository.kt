@@ -15,6 +15,8 @@ interface GhostlockRepository {
 
     fun setTcpRouteEnabled(enabled: Boolean)
 
+    fun setShizukuEnabled(enabled: Boolean)
+
     suspend fun exportCandidates(): List<OffsetCandidate>
 
     suspend fun importOffsets(json: String): OffsetImportResult
