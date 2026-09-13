@@ -67,7 +67,7 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
         selectedCpuPair = selectedCpuPair,
         safeModeEnabled = safeModeEnabled,
         tcpRouteEnabled = tcpRouteEnabled,
-        compact = isCompactKernel(),
+        tcpRouteSelectable = isTcpRouteSelectable(),
         shizukuEnabled = shizukuEnabled,
         shizukuStatus = if (shizukuEnabled) ShizukuRunner.status(appContext) else null,
     )
@@ -403,10 +403,11 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
 
     private fun isKernelSupported(): Boolean {
         val version = System.getProperty("os.version", "").orEmpty()
-        return version in SupportedKernels.UNAMES || importedOffsetsMatch(version)
+        if (version !in SupportedKernels.UNAMES && !importedOffsetsMatch(version)) return false
+        return !version.startsWith("5.15.") || (scalarValue("mcast_waiter_off") ?: 0L) != 0L
     }
 
-    private fun isCompactKernel(): Boolean {
+    private fun scalarValue(name: String): Long? {
         val version = System.getProperty("os.version", "").orEmpty()
         // an imported entry overrides the built-in one, a member it omits keeps the built-in
         // value, as in select_offsets. first match wins, same as load_offsets_json
@@ -414,9 +415,16 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
         val imported = (0 until (entries?.length() ?: 0))
             .mapNotNull { entries?.optJSONObject(it) }
             .firstOrNull { it.optString("release", "") == version }
-            ?.let { toKernelOffsets(it).scalars["compact_waiter"] }
-        val value = imported ?: SupportedKernels.BUILTIN[version]?.get("compact_waiter")
-        return value != null && value != 0L
+            ?.let { toKernelOffsets(it).scalars[name] }
+        return imported ?: SupportedKernels.BUILTIN[version]?.get(name)
+    }
+
+    /** tcp only outranks pselect where mcast cannot run. */
+    private fun isTcpRouteSelectable(): Boolean {
+        val version = System.getProperty("os.version", "").orEmpty()
+        return !version.startsWith("5.15.") &&
+                (scalarValue("mcast_waiter_off") ?: 0L) == 0L &&
+                (scalarValue("compact_waiter") ?: 0L) != 0L
     }
 
     private fun importedOffsetsMatch(version: String): Boolean {
