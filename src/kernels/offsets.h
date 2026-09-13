@@ -30,6 +30,16 @@ struct kernel_offsets {
 
 #define OFFSETS_ENTRY(uname, ...) { .uname_r = uname, __VA_ARGS__ }
 
+/* android13-5.15: same flat compact-waiter layout as 6.1. */
+#define STRUCT_OFFSETS_5_15                                                    \
+  .task_prio = 0x7C, .task_normal_prio = 0x84, .task_sched_task_group = 0x400, \
+  .task_pi_lock = 0x884, .task_pi_waiters = 0x898,                             \
+  .task_pi_top_task = 0x8A8, .task_pi_blocked_on = 0x8B0,                      \
+  .task_pid = 0x5D8, .task_tgid = 0x5DC,                                       \
+  .task_atomic_flags = 0x598, .task_real_cred = 0x790, .task_cred = 0x798,     \
+  .task_comm = 0x7A8, .task_tasks = 0x4D0, .task_seccomp = 0x860,              \
+  .compact_waiter = 1, .mm_struct_sz = 0x400, .kernel_phys_load = 0xa8000000
+
 #define STRUCT_OFFSETS_6_1                                                     \
   .task_prio = 0x84, .task_normal_prio = 0x8C, .task_sched_task_group = 0x348, \
   .task_pi_lock = 0x924, .task_pi_waiters = 0x938,                             \
@@ -101,6 +111,7 @@ static const struct kernel_offsets known_offsets[] = {
 #include "6.12.38-android16-5-g3c4da6410bcb-ab13872285-4k/offsets.h"
 #include "6.12.38-android16-5-g74ad46052215-ab14494108-4k/offsets.h"
 #include "6.12.38-android16-5-g844001fb8721-ab14552068-4k/offsets.h"
+#include "5.15.178-android13-8-00021-g6f2f96be86b9-ab13729987/offsets.h"
   { .uname_r = NULL }
 };
 
