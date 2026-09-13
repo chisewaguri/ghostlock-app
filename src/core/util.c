@@ -64,7 +64,11 @@ int kernel5_route_selected(void) {
   if (s && *s) {
     return strcmp(s, "mcast") == 0;
   }
-  return active_offsets && active_offsets->mcast_waiter_off > 0;
+  return active_offsets && active_offsets->mcast_waiter_off > 0 &&
+         active_offsets->mcast_buffer_size > 0 &&
+         (uint32_t)active_offsets->mcast_waiter_off +
+                 active_offsets->mcast_lock_offset + 8 <=
+             active_offsets->mcast_buffer_size;
 }
 
 void setup_kernelsnitch(void) {
