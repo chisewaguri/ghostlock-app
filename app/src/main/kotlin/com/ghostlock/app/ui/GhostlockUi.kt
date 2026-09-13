@@ -103,7 +103,7 @@ data class GhostlockUiState(
     val cpuPairIndex: Int = 0,
     val safeModeEnabled: Boolean = false,
     val tcpRouteEnabled: Boolean = true,
-    val compact: Boolean = false,
+    val tcpRouteSelectable: Boolean = false,
     val shizukuEnabled: Boolean = false,
     val shizukuStatus: ShizukuStatus? = null,
     val executionSheetVisible: Boolean = false,
@@ -586,7 +586,7 @@ private fun ControlPanel(
                 ),
             )
         }
-        if (state.compact) {
+        if (state.tcpRouteSelectable) {
             Card(modifier = modifier.padding(top = 12.dp)) {
                 SwitchPreference(
                     checked = state.tcpRouteEnabled,
