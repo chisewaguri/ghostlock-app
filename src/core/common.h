@@ -196,8 +196,6 @@ uintptr_t prepare_good_kernel_page(void);
 void log_sync(void);
 void fdset_put_word(fd_set *set, int word, uint64_t value);
 uint64_t fdset_get_word(const fd_set *set, int word);
-int tcp_route_selected(void);
-int kernel5_route_selected(void);
 void open_selected_fds(
     fd_set *in, fd_set *out, fd_set *ex, int read_fd, int write_fd);
 void reserve_standard_io(void);
@@ -205,6 +203,22 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex);
 void do_pselect_fake_lock_route(void);
 void do_tcp_fake_lock_route(void);
 void do_kernel5_fake_lock_route(void);
+
+/* Eligibility is measured against the profile's geometry. The payload cook
+ * constants ride the entry so callers never branch on which route is active. */
+struct route {
+  const char *name;
+  int (*fit)(void);
+  void (*fn)(void);
+  long long payload_delta;
+  size_t chunk_bias;
+  size_t fake_task_off;
+  int cred_copy_off;
+  /* W2 uses the exact-pointer write arm. */
+  int exact_write;
+};
+
+const struct route *select_route(void);
 void reset_main_route_state(void);
 int run_main_route_threads(void);
 void set_pselect_write_mode(uintptr_t target, int mode);
