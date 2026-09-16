@@ -636,4 +636,33 @@ mod tests {
         assert_eq!(pselect_waiter_shift_for(Some("6.12.30-android16-0")), 0);
         assert_eq!(pselect_waiter_shift_for(None), -2);
     }
+
+    #[test]
+    fn build_report_carries_the_pselect_window() {
+        let report = super::build_report(
+            Some("5.15.178-android13"),
+            0,
+            None,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            0,
+            -2,
+            -0x2F8,
+            None,
+        );
+        assert_eq!(report["pselect_waiter_off"], -0x2F8);
+        // structural default renders absent so the header stays small
+        let silent = super::build_report(
+            Some("5.15.178-android13"),
+            0,
+            None,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            0,
+            -2,
+            0,
+            None,
+        );
+        assert_eq!(silent["pselect_waiter_off"], 0);
+    }
 }
