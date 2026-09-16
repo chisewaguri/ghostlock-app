@@ -102,8 +102,9 @@ data class GhostlockUiState(
     val cpuPairLabels: List<String> = emptyList(),
     val cpuPairIndex: Int = 0,
     val safeModeEnabled: Boolean = false,
-    val tcpRouteEnabled: Boolean = true,
-    val tcpRouteSelectable: Boolean = false,
+    val routeChoiceIndex: Int = 0,
+    val routeChoices: List<String> = emptyList(),
+    val routeSelectable: Boolean = false,
     val shizukuEnabled: Boolean = false,
     val shizukuStatus: ShizukuStatus? = null,
     val executionSheetVisible: Boolean = false,
@@ -137,7 +138,7 @@ interface GhostlockActions {
     fun onExportOffsets()
     fun onCpuPairSelected(index: Int)
     fun onSafeModeChanged(enabled: Boolean)
-    fun onTcpRouteChanged(enabled: Boolean)
+    fun onRouteSelected(index: Int)
     fun onShizukuChanged(enabled: Boolean)
     fun onDialogItemSelected(index: Int)
     fun onDialogInputChange(value: String)
@@ -586,13 +587,20 @@ private fun ControlPanel(
                 ),
             )
         }
-        if (state.tcpRouteSelectable) {
+        if (state.routeSelectable) {
             Card(modifier = modifier.padding(top = 12.dp)) {
-                SwitchPreference(
-                    checked = state.tcpRouteEnabled,
-                    onCheckedChange = actions::onTcpRouteChanged,
-                    title = stringResource(R.string.tcp_route_label),
-                    summary = stringResource(if (state.tcpRouteEnabled) R.string.tcp_route_summary_on else R.string.tcp_route_summary_off),
+                val items = buildList {
+                    add(DropdownItem(icon = null, title = stringResource(R.string.route_auto_label)))
+                    state.routeChoices.forEach { route ->
+                        add(DropdownItem(icon = null, title = route))
+                    }
+                }
+                OverlaySpinnerPreference(
+                    title = stringResource(R.string.route_label),
+                    items = items,
+                    selectedIndex = state.routeChoiceIndex,
+                    showValue = true,
+                    onSelectedIndexChange = actions::onRouteSelected
                 )
             }
         }

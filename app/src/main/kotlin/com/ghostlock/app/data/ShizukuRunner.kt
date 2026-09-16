@@ -55,7 +55,7 @@ object ShizukuRunner {
         offsets: File,
         pair: CpuPair,
         safeMode: Boolean,
-        tcpRoute: Boolean,
+        forcedRoute: String?,
         onLog: (String) -> Unit,
     ): Int {
         try {
@@ -69,7 +69,7 @@ object ShizukuRunner {
             // the remote log name is fixed, so a stale one would read as this run's
             sh("rm -f $RemoteKsuLog")
             onLog("[*] launching $RemoteBinary")
-            return drainAndWait(newProcess(arrayOf("sh", "-c", command(pair, safeMode, tcpRoute))), onLog)
+            return drainAndWait(newProcess(arrayOf("sh", "-c", command(pair, safeMode, forcedRoute))), onLog)
         } finally {
             runCatching { sh("rm -f $RemoteBinary $RemoteKsud") }
             fetchKsuLog(onLog)
@@ -81,14 +81,16 @@ object ShizukuRunner {
      * remote environment and strip PATH from the shell. exec replaces sh, so
      * destroy() kills the binary rather than the wrapper.
      */
-    private fun command(pair: CpuPair, safeMode: Boolean, tcpRoute: Boolean): String {
+    private fun command(pair: CpuPair, safeMode: Boolean, forcedRoute: String?): String {
         val env = buildList {
             if (pair.primary != 0 || pair.consumer != 1) {
                 add("GHOSTLOCK_CORE=${pair.primary}")
                 add("GHOSTLOCK_CONSUMER_CORE=${pair.consumer}")
             }
             if (safeMode) add("GHOSTLOCK_DISABLE_MODULES=1")
-            if (!tcpRoute) add("GHOSTLOCK_TCP_ROUTE=0")
+            // env restricts the native eligible set, never enables it
+            if (forcedRoute == "pselect") add("GHOSTLOCK_TCP_ROUTE=0")
+            else if (forcedRoute != null) add("GHOSTLOCK_ROUTE=$forcedRoute")
         }
         return buildString {
             append("exec")

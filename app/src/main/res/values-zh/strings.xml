@@ -52,9 +52,8 @@
     <string name="cpu_pair_label">CPU 核心组</string>
     <string name="safe_mode_label">安全模式</string>
     <string name="safe_mode_summary">禁用所有模块</string>
-    <string name="tcp_route_label">利用路径</string>
-    <string name="tcp_route_summary_on">TCP 零拷贝</string>
-    <string name="tcp_route_summary_off">pselect</string>
+    <string name="route_label">利用路径</string>
+    <string name="route_auto_label">自动</string>
     <string name="shizuku_label">通过 Shizuku 执行</string>
     <string name="shizuku_summary_off">在应用进程内执行</string>
     <string name="shizuku_summary_on">shell uid，无 seccomp</string>

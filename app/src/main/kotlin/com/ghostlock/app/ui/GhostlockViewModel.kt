@@ -85,9 +85,9 @@ class GhostlockViewModel(
         mutableState.update { it.copy(safeModeEnabled = enabled) }
     }
 
-    fun toggleTcpRoute(enabled: Boolean) {
-        repository.setTcpRouteEnabled(enabled)
-        mutableState.update { it.copy(tcpRouteEnabled = enabled) }
+    fun selectRoute(index: Int) {
+        repository.setRouteChoiceIndex(index)
+        mutableState.update { it.copy(routeChoiceIndex = index) }
     }
 
     fun toggleShizuku(enabled: Boolean) {
@@ -246,8 +246,9 @@ class GhostlockViewModel(
                 cpuPairLabels = snapshot.cpuPairLabels,
                 cpuPairIndex = snapshot.selectedCpuPair,
                 safeModeEnabled = snapshot.safeModeEnabled,
-                tcpRouteEnabled = snapshot.tcpRouteEnabled,
-                tcpRouteSelectable = snapshot.tcpRouteSelectable,
+                routeChoiceIndex = snapshot.routeChoiceIndex,
+                routeChoices = snapshot.routeChoices,
+                routeSelectable = snapshot.routeSelectable,
                 shizukuEnabled = snapshot.shizukuEnabled,
                 shizukuStatus = snapshot.shizukuStatus,
                 exportVisible = canExport,

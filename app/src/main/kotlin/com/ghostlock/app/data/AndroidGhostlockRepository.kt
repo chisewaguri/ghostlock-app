@@ -48,7 +48,7 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
     private val cpuPairLabels = mutableListOf<String>()
     private var selectedCpuPair = 0
     private var safeModeEnabled = false
-    private var tcpRouteEnabled = true
+    private var routeChoiceIndex = 0
     private var shizukuEnabled = false
     private var pendingParsedEntries: JSONArray? = null
 
@@ -57,20 +57,24 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
         restoreCpuPair()
     }
 
-    override suspend fun snapshot(): KernelSnapshot = KernelSnapshot(
-        deviceName = resolveDeviceName(),
-        kernelRelease = System.getProperty("os.version", "unknown").orEmpty(),
-        socName = resolveSocName(),
-        kernelSupported = isKernelSupported(),
-        cpuPairs = cpuPairs.toList(),
-        cpuPairLabels = cpuPairLabels.toList(),
-        selectedCpuPair = selectedCpuPair,
-        safeModeEnabled = safeModeEnabled,
-        tcpRouteEnabled = tcpRouteEnabled,
-        tcpRouteSelectable = isTcpRouteSelectable(),
-        shizukuEnabled = shizukuEnabled,
-        shizukuStatus = if (shizukuEnabled) ShizukuRunner.status(appContext) else null,
-    )
+    override suspend fun snapshot(): KernelSnapshot {
+        val choices = feasibleRoutes()
+        return KernelSnapshot(
+            deviceName = resolveDeviceName(),
+            kernelRelease = System.getProperty("os.version", "unknown").orEmpty(),
+            socName = resolveSocName(),
+            kernelSupported = isKernelSupported(),
+            cpuPairs = cpuPairs.toList(),
+            cpuPairLabels = cpuPairLabels.toList(),
+            selectedCpuPair = selectedCpuPair,
+            safeModeEnabled = safeModeEnabled,
+            routeChoiceIndex = if (routeChoiceIndex < choices.size) routeChoiceIndex else 0,
+            routeChoices = choices,
+            routeSelectable = choices.size > 1,
+            shizukuEnabled = shizukuEnabled,
+            shizukuStatus = if (shizukuEnabled) ShizukuRunner.status(appContext) else null,
+        )
+    }
 
     override fun selectCpuPair(index: Int) {
         if (index !in cpuPairs.indices) return
@@ -85,8 +89,8 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
         safeModeEnabled = enabled
     }
 
-    override fun setTcpRouteEnabled(enabled: Boolean) {
-        tcpRouteEnabled = enabled
+    override fun setRouteChoiceIndex(index: Int) {
+        routeChoiceIndex = index
     }
 
     override fun setShizukuEnabled(enabled: Boolean) {
@@ -245,7 +249,8 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
                     offsets = offsetsFile,
                     pair = pair,
                     safeMode = safeModeEnabled,
-                    tcpRoute = tcpRouteEnabled,
+                    forcedRoute = feasibleRoutes().getOrNull(routeChoiceIndex)
+                        ?.takeIf { routeChoiceIndex > 0 },
                     onLog = onLog,
                 )
             }
@@ -287,7 +292,11 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
                         environment()["GHOSTLOCK_CONSUMER_CORE"] = pair.consumer.toString()
                     }
                     if (safeModeEnabled) environment()["GHOSTLOCK_DISABLE_MODULES"] = "1"
-                    if (!tcpRouteEnabled) environment()["GHOSTLOCK_TCP_ROUTE"] = "0"
+                    // index 0 is auto, the rest force a route; env restricts
+                    // the native eligible set, never enables it
+                    if (routeChoiceIndex > 0) {
+                        environment()["GHOSTLOCK_ROUTE"] = feasibleRoutes().getOrNull(routeChoiceIndex) ?: ""
+                    }
                 }
             try {
                 runProcess(command, onLog = {}, captureOutput = false)
@@ -416,13 +425,21 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
 
     private fun pselectFeasible(): Boolean = (scalarValue("pselect_waiter_off") ?: 0L) >= 0
 
+    private fun compactFeasible(): Boolean = (scalarValue("compact_waiter") ?: 0L) != 0L
+
+    /** feasible routes in native priority order (mcast > tcp > pselect). */
+    private fun feasibleRoutes(): List<String> =
+        buildList {
+            if (mcastFeasible()) add("mcast")
+            if (compactFeasible()) add("tcp")
+            if (pselectFeasible()) add("pselect")
+        }
+
     private fun isKernelSupported(): Boolean {
         val version = System.getProperty("os.version", "").orEmpty()
         if (version !in SupportedKernels.UNAMES && !importedOffsetsMatch(version)) return false
         return mcastFeasible() || compactFeasible() || pselectFeasible()
     }
-
-    private fun compactFeasible(): Boolean = (scalarValue("compact_waiter") ?: 0L) != 0L
 
     private fun scalarValue(name: String): Long? {
         val version = System.getProperty("os.version", "").orEmpty()
