@@ -13,7 +13,7 @@ interface GhostlockRepository {
 
     fun setSafeModeEnabled(enabled: Boolean)
 
-    fun setTcpRouteEnabled(enabled: Boolean)
+    fun setRouteChoiceIndex(index: Int)
 
     fun setShizukuEnabled(enabled: Boolean)
 

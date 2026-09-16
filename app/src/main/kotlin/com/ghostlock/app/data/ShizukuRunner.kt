@@ -14,8 +14,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Runs the exploit binary as shell uid through Shizuku. Shell uid cannot read
  * /data/app, so the binary, ksud and offsets.json travel through the shizuku
- * process stdin into /data/local/tmp, which is also where the binary homes
- * itself once no GHOSTLOCK_HOME is set.
+ * process stdin into /data/local/tmp.
  */
 object ShizukuRunner {
     private const val Home = "/data/local/tmp"
@@ -55,7 +54,7 @@ object ShizukuRunner {
         offsets: File,
         pair: CpuPair,
         safeMode: Boolean,
-        tcpRoute: Boolean,
+        forcedRoute: String?,
         onLog: (String) -> Unit,
     ): Int {
         try {
@@ -69,7 +68,7 @@ object ShizukuRunner {
             // the remote log name is fixed, so a stale one would read as this run's
             sh("rm -f $RemoteKsuLog")
             onLog("[*] launching $RemoteBinary")
-            return drainAndWait(newProcess(arrayOf("sh", "-c", command(pair, safeMode, tcpRoute))), onLog)
+            return drainAndWait(newProcess(arrayOf("sh", "-c", command(pair, safeMode, forcedRoute))), onLog)
         } finally {
             runCatching { sh("rm -f $RemoteBinary $RemoteKsud") }
             fetchKsuLog(onLog)
@@ -77,18 +76,20 @@ object ShizukuRunner {
     }
 
     /**
-     * env(1) carries the run variables: an exec envp would replace the whole
+     * env(1) carries the run variables. An exec envp would replace the whole
      * remote environment and strip PATH from the shell. exec replaces sh, so
      * destroy() kills the binary rather than the wrapper.
      */
-    private fun command(pair: CpuPair, safeMode: Boolean, tcpRoute: Boolean): String {
+    private fun command(pair: CpuPair, safeMode: Boolean, forcedRoute: String?): String {
         val env = buildList {
             if (pair.primary != 0 || pair.consumer != 1) {
                 add("GHOSTLOCK_CORE=${pair.primary}")
                 add("GHOSTLOCK_CONSUMER_CORE=${pair.consumer}")
             }
             if (safeMode) add("GHOSTLOCK_DISABLE_MODULES=1")
-            if (!tcpRoute) add("GHOSTLOCK_TCP_ROUTE=0")
+            // env restricts the native eligible set, never enables it
+            if (forcedRoute == "pselect") add("GHOSTLOCK_TCP_ROUTE=0")
+            else if (forcedRoute != null) add("GHOSTLOCK_ROUTE=$forcedRoute")
         }
         return buildString {
             append("exec")
@@ -98,10 +99,8 @@ object ShizukuRunner {
     }
 
     /**
-     * Streams output while waiting. waitForTimeout polls the exit server side,
-     * because the blocking waits throw over binder while the process lives. A
-     * leak child can hold stdout past death, so completion comes from the
-     * wait, never from EOF.
+     * Streams output while waiting. A leak child can hold stdout past the
+     * binary's death, so completion comes from the timeout, not from EOF.
      */
     private fun drainAndWait(process: ShizukuRemoteProcess, onLog: (String) -> Unit): Int {
         val input = process.inputStream
@@ -126,7 +125,7 @@ object ShizukuRunner {
         return if (exited) process.exitValue() else -1
     }
 
-    /** Shell uid cannot read /data/app, so file bytes travel through stdin; wc -c catches truncation. */
+    /** Shell uid cannot read /data/app, so file bytes travel through stdin. wc -c catches truncation. */
     private fun stage(src: File, dest: String, onLog: (String) -> Unit) {
         val want = src.length()
         if (remoteSize(dest) == want) {
@@ -190,7 +189,7 @@ object ShizukuRunner {
         context.packageManager.getApplicationInfo(ShizukuPackage, PackageManager.ApplicationInfoFlags.of(0))
     }.isSuccess
 
-    /** newProcess is private since api 13.1.1 but still present; proguard-rules.pro keeps R8 off it. */
+    /** newProcess is private since api 13.1.1 but still present. proguard-rules.pro keeps R8 off it. */
     private val newProcessMethod: Method by lazy {
         Shizuku::class.java
             .getDeclaredMethod("newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java)

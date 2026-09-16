@@ -13,9 +13,12 @@ data class KernelSnapshot(
     val cpuPairLabels: List<String>,
     val selectedCpuPair: Int,
     val safeModeEnabled: Boolean,
-    val tcpRouteEnabled: Boolean,
-    /** false on mcast, 5.15 and non-compact kernels, where the switch would decide nothing. */
-    val tcpRouteSelectable: Boolean,
+    /** 0 = auto, 1+ = forced route named by routeChoices[index - 1] */
+    val routeChoiceIndex: Int,
+    /** feasible routes in native priority order */
+    val routeChoices: List<String>,
+    /** false when one route fits and the picker would decide nothing */
+    val routeSelectable: Boolean,
     val shizukuEnabled: Boolean = false,
     /** null while the shizuku route is off. */
     val shizukuStatus: ShizukuStatus? = null,

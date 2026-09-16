@@ -47,8 +47,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // the shizuku grant dialog is another activity, so the status it changes
-        // is only visible once this one comes back
+        // the grant dialog is another activity, so the status it changes is only
+        // visible once this one comes back
         viewModel.refresh()
     }
 
@@ -125,7 +125,7 @@ private fun GhostlockRoute(
             override fun onExportOffsets() = viewModel.exportOffsets()
             override fun onCpuPairSelected(index: Int) = viewModel.selectCpuPair(index)
             override fun onSafeModeChanged(enabled: Boolean) = viewModel.toggleSafeMode(enabled)
-            override fun onTcpRouteChanged(enabled: Boolean) = viewModel.toggleTcpRoute(enabled)
+            override fun onRouteSelected(index: Int) = viewModel.selectRoute(index)
             override fun onShizukuChanged(enabled: Boolean) = viewModel.toggleShizuku(enabled)
             override fun onDialogItemSelected(index: Int) = viewModel.onDialogItemSelected(index)
             override fun onDialogInputChange(value: String) = viewModel.onDialogInputChange(value)
