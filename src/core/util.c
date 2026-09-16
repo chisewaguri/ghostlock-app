@@ -58,8 +58,11 @@ static int fit_mcast(void) {
              active_offsets->mcast_buffer_size;
 }
 
+/* tcp's frame plant is device-proven only on 6.x compact kernels; 5.10
+ * shares compact_waiter but its TCP_ZEROCOPY_RECEIVE rejects the layout. */
 static int fit_tcp(void) {
-  return active_offsets && active_offsets->compact_waiter;
+  return active_offsets && active_offsets->compact_waiter &&
+         strncmp(active_offsets->uname_r, "5.", 2) != 0;
 }
 
 /* The extractor stamps pselect_waiter_off<0 when its fd_set copy stops

@@ -427,11 +427,16 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
 
     private fun compactFeasible(): Boolean = (scalarValue("compact_waiter") ?: 0L) != 0L
 
+    // mirrors fit_tcp in src/core/util.c: tcp's frame plant is device-proven
+    // only on 6.x compact kernels
+    private fun tcpFeasible(): Boolean =
+        compactFeasible() && !System.getProperty("os.version", "").orEmpty().startsWith("5.")
+
     /** feasible routes in native priority order (mcast > tcp > pselect). */
     private fun feasibleRoutes(): List<String> =
         buildList {
             if (mcastFeasible()) add("mcast")
-            if (compactFeasible()) add("tcp")
+            if (tcpFeasible()) add("tcp")
             if (pselectFeasible()) add("pselect")
         }
 
