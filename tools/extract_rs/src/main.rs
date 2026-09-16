@@ -307,6 +307,7 @@ fn run(cli: &Cli) -> Result<i32> {
 
     let mut derived: BTreeMap<String, u64> = BTreeMap::new();
     let mut mcast: Option<McastLayout> = None;
+    let mut pselect_infeasible = false;
     if !cli.no_disasm {
         if let Some(btf) = &btf {
             match derive_pselect_layout(
@@ -350,8 +351,10 @@ fn run(cli: &Cli) -> Result<i32> {
                     );
                 }
                 Err(ExtractError::Infeasible(message)) => {
-                    eprintln!("error: pselect route not feasible on this kernel: {message}");
-                    return Ok(3);
+                    // the profile may have another feasible route, so keep
+                    // collecting stamps and decide eligibility at the end
+                    eprintln!("warning: pselect route not feasible on this kernel: {message}");
+                    pselect_infeasible = true;
                 }
                 Err(err) => {
                     eprintln!("warning: pselect_waiter_shift derivation failed: {err}");
@@ -369,38 +372,38 @@ fn run(cli: &Cli) -> Result<i32> {
                     eprintln!("warning: loggers_0_1 derivation failed: {err}");
                 }
             }
-            if kernel_struct_macro(release.as_deref()) == Some("STRUCT_OFFSETS_5_15") {
-                match derive_mcast_layout(&boot.kernel, &rel_symbols, &sorted_offsets, btf) {
-                    Ok(layout) => {
-                        let frame_parts: Vec<String> = [
-                            "frame_setsockopt_wrapper",
-                            "frame_setsockopt_syscall",
-                            "frame_setsockopt_ops",
-                            "frame_setsockopt_proto",
-                            "frame_setsockopt_handler",
-                        ]
-                        .iter()
-                        .filter_map(|key| {
-                            layout.frames.get(*key).map(|value| {
-                                format!("{}={:#x}", key.split('_').nth(2).unwrap_or(key), value)
-                            })
+            // mcast is not 5.15-locked: stamp the window wherever the copy
+            // path carries it, so a route picker can force any feasible route
+            match derive_mcast_layout(&boot.kernel, &rel_symbols, &sorted_offsets, btf) {
+                Ok(layout) => {
+                    let frame_parts: Vec<String> = [
+                        "frame_setsockopt_wrapper",
+                        "frame_setsockopt_syscall",
+                        "frame_setsockopt_ops",
+                        "frame_setsockopt_proto",
+                        "frame_setsockopt_handler",
+                    ]
+                    .iter()
+                    .filter_map(|key| {
+                        layout.frames.get(*key).map(|value| {
+                            format!("{}={:#x}", key.split('_').nth(2).unwrap_or(key), value)
                         })
-                        .collect();
-                        eprintln!(
-                            "info: mcast chain {} frames={} buffer=sp+{:#x} (svc{}) \
-                             waiter=svc{} waiter_off={:#x}",
-                            layout.chain,
-                            frame_parts.join(" "),
-                            layout.buffer_local,
-                            layout.buffer_depth,
-                            layout.waiter_depth,
-                            layout.waiter_off,
-                        );
-                        mcast = Some(layout);
-                    }
-                    Err(err) => {
-                        eprintln!("warning: mcast stamp derivation failed: {err}");
-                    }
+                    })
+                    .collect();
+                    eprintln!(
+                        "info: mcast chain {} frames={} buffer=sp+{:#x} (svc{}) \
+                         waiter=svc{} waiter_off={:#x}",
+                        layout.chain,
+                        frame_parts.join(" "),
+                        layout.buffer_local,
+                        layout.buffer_depth,
+                        layout.waiter_depth,
+                        layout.waiter_off,
+                    );
+                    mcast = Some(layout);
+                }
+                Err(err) => {
+                    eprintln!("warning: mcast stamp derivation failed: {err}");
                 }
             }
         } else {
@@ -427,25 +430,26 @@ fn run(cli: &Cli) -> Result<i32> {
         });
     // No measurement at all keeps the structural default (0); only a
     // measured negative distance proves pselect cannot reach the waiter.
-    let pselect_waiter_off = derived
-        .get("pselect_waiter_off_value")
-        .map(|value| *value as i64)
-        .unwrap_or(0);
+    let pselect_waiter_off = if pselect_infeasible {
+        -1
+    } else {
+        derived
+            .get("pselect_waiter_off_value")
+            .map(|value| *value as i64)
+            .unwrap_or(0)
+    };
     let mcast_fits = mcast.as_ref().is_some_and(|layout| {
         layout.waiter_off as u64 + layout.lock_offset + 8 <= layout.buffer_size
     });
     if pselect_waiter_off < 0 && !mcast_fits {
         let detail = match &mcast {
             Some(layout) => format!(
-                "pselect cannot reach the waiter (waiter_off={pselect_waiter_off}) and \
-                 the mcast buffer misses it too (waiter_off={:#x} + lock {:#x} + 8 > \
-                 buffer {})",
+                "pselect cannot reach the waiter and the mcast buffer misses it too \
+                 (waiter_off={:#x} + lock {:#x} + 8 > buffer {})",
                 layout.waiter_off, layout.lock_offset, layout.buffer_size
             ),
-            None => format!(
-                "pselect cannot reach the waiter (waiter_off={pselect_waiter_off}) and \
-                 no mcast stamp was derived"
-            ),
+            None => "pselect cannot reach the waiter and no mcast stamp was derived"
+                .to_string(),
         };
         eprintln!("error: no feasible route on this kernel: {detail}");
         return Ok(3);
