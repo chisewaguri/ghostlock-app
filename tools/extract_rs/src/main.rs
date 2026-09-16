@@ -262,7 +262,7 @@ fn run(cli: &Cli) -> Result<i32> {
             if kernel_struct_macro(Some(release)).is_none() {
                 eprintln!(
                     "warning: {release} is not a verified kernel family \
-                     (5.15, 6.1, 6.6, 6.12); emitting the 6.6 layout as a \
+                     (5.10, 5.15, 6.1, 6.6, 6.12); emitting the 6.6 layout as a \
                      testing starting point, verify the waiter layout and \
                      slab stride before trusting it"
                 );
