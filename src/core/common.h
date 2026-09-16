@@ -153,6 +153,8 @@ extern atomic_int consumer_inflight;
 extern atomic_int main_route_delay_usec;
 extern int route_last_step;
 extern int route_last_errno;
+/* consumer drained and fds released; a dirty run must not be sprayed onto */
+extern int route_last_clean;
 extern int memfd_leak;
 
 int run_exploit(int argc, char **argv);

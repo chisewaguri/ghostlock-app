@@ -332,7 +332,7 @@ void reset_main_route_state(void) {
   atomic_store(&consumer_calls, 0); atomic_store(&consumer_success, 0);
   atomic_store(&consumer_inflight, 0);
   atomic_store(&main_route_delay_usec, PSELECT_ENTER_DELAY_USEC);
-  route_last_step = 0; route_last_errno = 0;
+  route_last_step = 0; route_last_errno = 0; route_last_clean = 0;
 }
 
 int run_main_route_threads(void) {
@@ -356,7 +356,8 @@ int run_main_route_threads(void) {
   pthread_join(consumer, NULL);
 
   return atomic_load(&consumer_calls) > 0 &&
-         atomic_load(&consumer_success) > 0 && route_last_step == 0;
+         atomic_load(&consumer_success) > 0 && route_last_step == 0 &&
+         route_last_clean;
 }
 
 static int do_one_write(uintptr_t target, const char *desc, int mode, int leaf) {
