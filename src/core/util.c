@@ -62,6 +62,13 @@ static int fit_tcp(void) {
   return active_offsets && active_offsets->compact_waiter;
 }
 
+/* The extractor stamps pselect_waiter_off<0 when its fd_set copy stops
+ * short of the stale waiter (5.15); a profile carrying that refusal has
+ * no pselect transport. Measured 0 or structural default stays eligible. */
+static int fit_pselect(void) {
+  return !active_offsets || active_offsets->pselect_waiter_off >= 0;
+}
+
 /* First fitted entry wins. tcp's window is sizeof(struct
  * tcp_zerocopy_receive), always wide enough for the waiter frame, so only
  * compactness decides its fit. */
@@ -70,7 +77,7 @@ static const struct route routes[] = {
      TCP_FAKE_TASK_OFF, TCP_CRED_COPY_OFF},
     {"tcp", fit_tcp, do_tcp_fake_lock_route, 1, 0, 0xe80, TCP_FAKE_TASK_OFF,
      TCP_CRED_COPY_OFF},
-    {"pselect", NULL, do_pselect_fake_lock_route, 0, SKB_DATA_DELTA,
+    {"pselect", fit_pselect, do_pselect_fake_lock_route, 0, SKB_DATA_DELTA,
      SKB_FRAG_BIAS, FAKE_TASK_OFF, CRED_COPY_OFF},
 };
 

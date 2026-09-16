@@ -335,14 +335,19 @@ fn run(cli: &Cli) -> Result<i32> {
                     .collect();
                     eprintln!(
                         "info: pselect chain {} frames={} buffer={:#x} waiter={:#x} \
-                         shift={shift} (derived {} - 2)",
+                         shift={shift} waiter_off={:#x} (derived {} - 2)",
                         layout.chain,
                         frame_parts.join(" "),
                         layout.pselect_buffer,
                         layout.waiter_local,
+                        layout.waiter_off,
                         layout.shift,
                     );
                     derived.insert("pselect_waiter_shift_value".to_string(), shift as u64);
+                    derived.insert(
+                        "pselect_waiter_off_value".to_string(),
+                        layout.waiter_off as u64,
+                    );
                 }
                 Err(ExtractError::Infeasible(message)) => {
                     eprintln!("error: pselect route not feasible on this kernel: {message}");
@@ -420,6 +425,31 @@ fn run(cli: &Cli) -> Result<i32> {
             );
             shift
         });
+    // No measurement at all keeps the structural default (0); only a
+    // measured negative distance proves pselect cannot reach the waiter.
+    let pselect_waiter_off = derived
+        .get("pselect_waiter_off_value")
+        .map(|value| *value as i64)
+        .unwrap_or(0);
+    let mcast_fits = mcast.as_ref().is_some_and(|layout| {
+        layout.waiter_off as u64 + layout.lock_offset + 8 <= layout.buffer_size
+    });
+    if pselect_waiter_off < 0 && !mcast_fits {
+        let detail = match &mcast {
+            Some(layout) => format!(
+                "pselect cannot reach the waiter (waiter_off={pselect_waiter_off}) and \
+                 the mcast buffer misses it too (waiter_off={:#x} + lock {:#x} + 8 > \
+                 buffer {})",
+                layout.waiter_off, layout.lock_offset, layout.buffer_size
+            ),
+            None => format!(
+                "pselect cannot reach the waiter (waiter_off={pselect_waiter_off}) and \
+                 no mcast stamp was derived"
+            ),
+        };
+        eprintln!("error: no feasible route on this kernel: {detail}");
+        return Ok(3);
+    }
     if let Some(slot) = derived.get("off_slide_loggers_0_1").copied() {
         symbol_offsets.insert("off_slide_loggers_0_1".to_string(), Some(slot));
     }
@@ -501,6 +531,7 @@ fn run(cli: &Cli) -> Result<i32> {
             &struct_offsets,
             kernel_phys_load,
             pselect_shift,
+            pselect_waiter_off,
             mcast.as_ref(),
         );
         let target = report::kernel_header_path(&key);
@@ -532,6 +563,7 @@ fn run(cli: &Cli) -> Result<i32> {
             &struct_offsets,
             kernel_phys_load,
             pselect_shift,
+            pselect_waiter_off,
             mcast.as_ref(),
         )
     } else {
@@ -543,6 +575,7 @@ fn run(cli: &Cli) -> Result<i32> {
             &struct_offsets,
             btf_size,
             pselect_shift,
+            pselect_waiter_off,
             mcast.as_ref(),
         );
         serde_json::to_string_pretty(&report_value).unwrap() + "\n"
