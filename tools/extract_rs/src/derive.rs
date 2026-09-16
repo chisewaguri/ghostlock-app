@@ -97,7 +97,6 @@ pub fn remove_waiter_uses_current(dis: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::remove_waiter_uses_current;
-
     #[test]
     fn patched_remove_waiter_never_reads_current() {
         let dis = vec![
@@ -795,4 +794,43 @@ pub fn derive_nf_logger_registration(
         loggers_0_1: slot,
         nf_log_type_ulog: ulog_value,
     })
+}
+
+/// The measured-eligibility predicates, shared by src/core/util.c and the
+/// app gate.
+pub mod fit {
+    /// The option buffer must cover the waiter's task, lock and length words.
+    pub fn mcast(buffer_size: u64, waiter_off: i64, lock_offset: u64) -> bool {
+        waiter_off > 0
+            && buffer_size > 0
+            && (waiter_off as u64) + lock_offset + 8 <= buffer_size
+    }
+
+    /// The extractor stamps a negative distance when its fd_set copy stops
+    /// short of the waiter, which leaves no pselect transport.
+    pub const fn pselect(waiter_off: i64) -> bool {
+        waiter_off >= 0
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::fit;
+
+    #[test]
+    fn mcast_fit_rejects_a_window_short_of_lock_plus_len() {
+        assert!(fit::mcast(0x108, 0x60, 0x38));
+        assert!(fit::mcast(0xA0, 0x60, 0x38));
+        assert!(!fit::mcast(0x98, 0x60, 0x38));
+        assert!(!fit::mcast(0x108, 0xD0, 0x38));
+        assert!(!fit::mcast(0x108, 0, 0x38));
+        assert!(!fit::mcast(0, 0x60, 0x38));
+    }
+
+    #[test]
+    fn pselect_fit_follows_the_stamped_distance() {
+        assert!(fit::pselect(0));
+        assert!(fit::pselect(0x78));
+        assert!(!fit::pselect(-0x2F8));
+    }
 }
