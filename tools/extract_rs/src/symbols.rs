@@ -51,6 +51,8 @@ pub const STRUCT_FIELDS: &[(&str, &[(&str, &str)])] = &[
             ("waiter_pi_tree", "pi_tree"),
             ("waiter_task", "task"),
             ("waiter_lock", "lock"),
+            // 5.10 carries prio/deadline instead and has no ww_ctx, so both
+            // stay 0 and the pselect word-shift stamp places the fake waiter
             ("waiter_wake_state", "wake_state"),
             ("waiter_ww_ctx", "ww_ctx"),
             ("waiter_tree", "tree_entry"),
@@ -94,9 +96,8 @@ pub fn resolve_symbols(symbols: &BTreeMap<String, BTreeSet<u64>>, base: u64) -> 
 }
 
 /// Layout selector for a release, or None when that kernel has no measured
-/// geometry. Only 5.10, 5.15, 6.1, 6.6 and 6.12 are verified; callers treat
-/// None as "use STRUCT_OFFSETS_6_6 as a testing starting point", and the
-/// extractor warns so nobody mistakes a fallback table for a verified one.
+/// geometry. None means the caller falls back to STRUCT_OFFSETS_6_6 as a
+/// testing starting point, and the extractor warns about it.
 pub fn kernel_struct_macro(release: Option<&str>) -> Option<&'static str> {
     let release = release?;
     let mut parts = release.split('.');
@@ -164,8 +165,8 @@ pub fn resolve_structs(btf: Option<&Btf>) -> ResolvedStructs {
     );
     result.insert(
         "struct_slab_cache".to_string(),
-        // 6.1 and later put the SLUB descriptor in struct slab; 5.15 still
-        // keeps slab_cache inside struct page's slab union.
+        // 6.1 and later put the descriptor in struct slab, 5.15 keeps
+        // slab_cache inside struct page's slab union
         btf.field("slab", "slab_cache")
             .or_else(|| btf.field("page", "slab_cache")),
     );

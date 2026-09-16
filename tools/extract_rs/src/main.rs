@@ -36,6 +36,10 @@ struct Cli {
     /// optional XBL xbl_config.img; derive kernel physical load from its FDT
     #[arg(long)]
     xbl_config: Option<PathBuf>,
+    /// override the embedded BTF with a blob from a file (e.g. a BTF section
+    /// carved out of a reference vmlinux of the same KMI)
+    #[arg(long)]
+    btf: Option<PathBuf>,
     /// kernel physical load address (hex or decimal); overrides defaults
     #[arg(long, value_parser = parse_int)]
     phys: Option<u64>,
@@ -247,12 +251,15 @@ fn run(cli: &Cli) -> Result<i32> {
         }
     }
 
-    let btf_raw = btf_at.as_ref().map(|(_, blob)| blob.clone());
+    let btf_raw = match &cli.btf {
+        Some(path) => Some(std::fs::read(path)?),
+        None => btf_at.as_ref().map(|(_, blob)| blob.clone()),
+    };
     let btf = btf_raw.as_deref().map(Btf::new).transpose()?;
     if btf.is_none() {
         eprintln!(
-            "warning: embedded BTF not found; symbols come from kallsyms \
-             and struct offsets fall back to target.h defaults"
+            "warning: embedded BTF not found and no --btf override; symbols come \
+             from kallsyms and struct offsets fall back to target.h defaults"
         );
     }
 
@@ -428,8 +435,8 @@ fn run(cli: &Cli) -> Result<i32> {
             );
             shift
         });
-    // No measurement at all keeps the structural default (0); only a
-    // measured negative distance proves pselect cannot reach the waiter.
+    // 0 is the structural default and stays eligible. Only a measured negative
+    // distance proves pselect cannot reach the waiter.
     let pselect_waiter_off = if pselect_infeasible {
         -1
     } else {
@@ -499,11 +506,17 @@ fn run(cli: &Cli) -> Result<i32> {
     }
     report::require_fields(&symbol_offsets, &BTreeSet::new())?;
     if btf.is_some() {
+        let mut optional: BTreeSet<&str> = BTreeSet::new();
+        // 5.10's flat rt_mutex_waiter has neither field, and the runtime
+        // wildcards a 0 stamp
+        if btf.as_ref().unwrap().field("rt_mutex_waiter", "wake_state").is_none() {
+            optional.extend(["waiter_wake_state", "waiter_ww_ctx"]);
+        }
         let struct_fields_u64: BTreeMap<String, Option<u64>> = struct_offsets
             .iter()
             .map(|(key, value)| (key.clone(), value.map(|v| v as u64)))
             .collect();
-        report::require_fields(&struct_fields_u64, &BTreeSet::new())?;
+        report::require_fields(&struct_fields_u64, &optional)?;
     }
     if let Some(mm_size) = struct_offsets.get("struct_mm_struct").copied().flatten() {
         eprintln!(

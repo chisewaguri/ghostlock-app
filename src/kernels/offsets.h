@@ -39,6 +39,17 @@ struct kernel_offsets {
 
 #define OFFSETS_ENTRY(uname, ...) { .uname_r = uname, __VA_ARGS__ }
 
+/* android12-5.10: flat compact-waiter layout, no wake_state or ww_ctx.
+ * Fields from the marble BTF (same KMI as the Pixel 6 gs101 kernel). */
+#define STRUCT_OFFSETS_5_10                                                    \
+  .task_prio = 0x84, .task_normal_prio = 0x8C, .task_sched_task_group = 0x310, \
+  .task_pi_lock = 0x86C, .task_pi_waiters = 0x880,                             \
+  .task_pi_top_task = 0x890, .task_pi_blocked_on = 0x898,                      \
+  .task_pid = 0x5C8, .task_tgid = 0x5CC,                                       \
+  .task_atomic_flags = 0x590, .task_real_cred = 0x778, .task_cred = 0x780,     \
+  .task_comm = 0x790, .task_tasks = 0x4C8, .task_seccomp = 0x848,              \
+  .compact_waiter = 1, .mm_struct_sz = 0x400
+
 /* android13-5.15: same flat compact-waiter layout as 6.1. */
 #define STRUCT_OFFSETS_5_15                                                    \
   .task_prio = 0x7C, .task_normal_prio = 0x84, .task_sched_task_group = 0x400, \
@@ -76,6 +87,7 @@ struct kernel_offsets {
 
 static const struct kernel_offsets known_offsets[] = {
 /* Add new kernels by creating src/kernels/<uname-release>/offsets.h */
+#include "5.10.236-android12-9-00003-gfb24cf99ad97-ab14313284/offsets.h"
 #include "6.1.115-android14-11-ga2521ca27699-ab13294383/offsets.h"
 #include "6.1.118-android14-11-ga3b9c44908dd-ab13320413/offsets.h"
 #include "6.1.118-android14-11-gca0ef6d17716-ab13624819/offsets.h"
