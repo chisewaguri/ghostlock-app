@@ -13,6 +13,7 @@ use crate::symbols::{OPTIONAL_SYMBOLS, STRUCT_FIELDS, SYMBOLS};
 pub const MTK_DEFAULT_PHYS_LOAD: u64 = 0x8000_0000;
 pub const QC_PHYS_LOAD_6_6: u64 = 0xA800_0000;
 pub const QC_PHYS_LOAD_6_1: u64 = 0xA800_0000;
+pub const QC_PHYS_LOAD_5_10: u64 = 0xA800_0000;
 pub const QC_PHYS_LOAD_6_12: u64 = 0xC780_0000;
 
 /// Python insertion order of resolve_symbols(): header output matches the
@@ -64,7 +65,7 @@ pub fn phys_needs_override(release: Option<&str>, phys: Option<u64>) -> bool {
     }
     let default = match crate::symbols::kernel_struct_macro(release) {
         Some("STRUCT_OFFSETS_6_12") => QC_PHYS_LOAD_6_12,
-        Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_15") => QC_PHYS_LOAD_6_1,
+        Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_10") | Some("STRUCT_OFFSETS_5_15") => QC_PHYS_LOAD_6_1,
         _ => QC_PHYS_LOAD_6_6,
     };
     phys != default
@@ -73,6 +74,7 @@ pub fn phys_needs_override(release: Option<&str>, phys: Option<u64>) -> bool {
 pub fn pselect_waiter_shift_for(release: Option<&str>) -> i64 {
     match crate::symbols::kernel_struct_macro(release) {
         Some("STRUCT_OFFSETS_6_12") => 0,
+        Some("STRUCT_OFFSETS_5_10") => 0,
         // android14-6.1 compiles its fd_set words one qword later than
         // 6.6; the committed tables all measure 1.
         Some("STRUCT_OFFSETS_6_1") => 1,
@@ -89,7 +91,7 @@ pub fn validate_kernel_phys_load(release: Option<&str>, phys: Option<u64>, mtk: 
     } else {
         match crate::symbols::kernel_struct_macro(release) {
             Some("STRUCT_OFFSETS_6_12") => QC_PHYS_LOAD_6_12,
-            Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_15") => QC_PHYS_LOAD_6_1,
+            Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_10") | Some("STRUCT_OFFSETS_5_15") => QC_PHYS_LOAD_6_1,
             _ => QC_PHYS_LOAD_6_6,
         }
     };
@@ -233,7 +235,7 @@ pub fn render_c(
     }
     if matches!(
         macro_name,
-        Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_15")
+        Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_10") | Some("STRUCT_OFFSETS_5_15")
     ) {
         // spell the layout fields out so a manually registered header does
         // not depend on the selector macro carrying them
@@ -314,7 +316,7 @@ pub fn build_report(
     });
     if matches!(
         crate::symbols::kernel_struct_macro(release),
-        Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_15")
+        Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_10") | Some("STRUCT_OFFSETS_5_15")
     ) {
         // 0x400 is the device SLUB stride, not the BTF 0x3c0/0x3e0
         report["compact_waiter"] = json!(1);
@@ -627,6 +629,26 @@ mod tests {
     }
 
     #[test]
+    fn render_c_carries_the_5_10_layout() {
+        let symbols: BTreeMap<String, Option<u64>> = BTreeMap::new();
+        let structs: BTreeMap<String, Option<u32>> = BTreeMap::new();
+        let out = render_c(
+            Some("5.10.237-android12-9"),
+            "x",
+            &symbols,
+            &structs,
+            None,
+            0,
+            0,
+            None,
+        );
+        assert!(out.contains("STRUCT_OFFSETS_5_10"));
+        assert!(out.contains(".compact_waiter=1"));
+        assert!(out.contains(".mm_struct_sz=0x400"));
+        assert!(!out.contains("mcast"));
+    }
+
+    #[test]
     fn pselect_waiter_shift_matches_the_committed_tables() {
         assert_eq!(
             pselect_waiter_shift_for(Some("6.1.118-android14-11-gca0ef6d17716-ab13624819")),
@@ -634,6 +656,7 @@ mod tests {
         );
         assert_eq!(pselect_waiter_shift_for(Some("6.6.92-android15-8")), -2);
         assert_eq!(pselect_waiter_shift_for(Some("6.12.30-android16-0")), 0);
+        assert_eq!(pselect_waiter_shift_for(Some("5.10.237-android12-9")), 0);
         assert_eq!(pselect_waiter_shift_for(None), -2);
     }
 

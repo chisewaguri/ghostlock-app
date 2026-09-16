@@ -392,7 +392,7 @@ pub fn derive_futex_waiter(
         frames.insert(format!("frame_{key}"), first_sp_frame(text, full_name)?);
     }
 
-    // 6.1 names these tree_entry/pi_tree_entry, 5.15 and 6.6 tree/pi_tree.
+    // 6.1 names these tree_entry/pi_tree_entry, other kernels tree/pi_tree.
     // Both spellings land on the same struct offsets.
     let pi_tree = btf
         .field("rt_mutex_waiter", "pi_tree")
