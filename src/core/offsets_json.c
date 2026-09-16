@@ -229,6 +229,22 @@ static void fill_external_entry(struct kernel_offsets *out,
   if (v && json_parse_int(v, end, &num)) {
     out->pselect_waiter_shift = (int)num;
   }
+  v = json_member_value(obj, end, "mcast_waiter_off");
+  if (v && json_parse_int(v, end, &num)) {
+    out->mcast_waiter_off = (int)num;
+  }
+  v = json_member_value(obj, end, "mcast_buffer_size");
+  if (v && json_parse_int(v, end, &num)) {
+    out->mcast_buffer_size = (uint32_t)num;
+  }
+  v = json_member_value(obj, end, "mcast_task_offset");
+  if (v && json_parse_int(v, end, &num)) {
+    out->mcast_task_offset = (uint32_t)num;
+  }
+  v = json_member_value(obj, end, "mcast_lock_offset");
+  if (v && json_parse_int(v, end, &num)) {
+    out->mcast_lock_offset = (uint32_t)num;
+  }
   v = json_member_value(obj, end, "compact_waiter");
   if (v && json_parse_int(v, end, &num)) {
     out->compact_waiter = (uint8_t)num;
