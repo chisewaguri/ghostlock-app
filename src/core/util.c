@@ -59,6 +59,14 @@ int tcp_route_selected(void) {
   return active_offsets && active_offsets->compact_waiter;
 }
 
+int kernel5_route_selected(void) {
+  const char *s = getenv("GHOSTLOCK_ROUTE");
+  if (s && *s) {
+    return strcmp(s, "mcast") == 0;
+  }
+  return active_offsets && active_offsets->mcast_waiter_off > 0;
+}
+
 void setup_kernelsnitch(void) {
   int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
   ks = kernelsnitch_setup(
