@@ -266,17 +266,37 @@ pub fn derive_pselect_layout(
     let pselect_word0 = -(frame_sum as i64) + pselect_buffer as i64;
     let futex_waiter = futex.depth;
     let delta = futex_waiter - pselect_word0;
-    if delta < 0 || delta % 8 != 0 {
+    if delta % 8 != 0 {
         return Err(ExtractError::new(format!(
-            "pselect/futex overlap is not a non-negative qword: {delta}"
+            "pselect/futex overlap is not qword-aligned: {delta}"
         )));
+    }
+    let chain = pselect_chain
+        .iter()
+        .map(|key| names.iter().find(|(k, _)| k == key).unwrap().1)
+        .collect::<Vec<_>>()
+        .join("->");
+    if delta < 0 {
+        // the fd_set copy stops short of the waiter: pselect cannot write.
+        // stamp the negative distance so the caller can still derive every
+        // other route before deciding eligibility
+        eprintln!(
+            "info: pselect fd_set copy stops {delta} bytes short of the waiter; \
+             stamping the route ineligible"
+        );
+        return Ok(PselectLayout {
+            shift: 0,
+            waiter_local: futex.local,
+            pselect_word0,
+            futex_waiter,
+            pselect_buffer,
+            waiter_off: delta,
+            chain,
+            futex_chain: futex.chain,
+            frames,
+        });
     }
     let shift = (delta / 8) as u64;
-    if shift > 16 {
-        return Err(ExtractError::infeasible(format!(
-            "PSELECT_WAITER_WORD_SHIFT too large: {shift}"
-        )));
-    }
     if shift > 3 {
         return Err(ExtractError::infeasible(format!(
             "futex waiter starts {shift} qwords above the fd_set buffer; \
