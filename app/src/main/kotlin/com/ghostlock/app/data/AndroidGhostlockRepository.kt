@@ -295,7 +295,7 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
                     // index 0 is auto, the rest force a route; env restricts
                     // the native eligible set, never enables it
                     if (routeChoiceIndex > 0) {
-                        environment()["GHOSTLOCK_ROUTE"] = feasibleRoutes().getOrNull(routeChoiceIndex) ?: ""
+                        environment()["GHOSTLOCK_ROUTE"] = feasibleRoutes().getOrNull(routeChoiceIndex - 1) ?: ""
                     }
                 }
             try {
