@@ -397,14 +397,21 @@ pub fn derive_futex_waiter(
     let pi_tree = btf
         .field("rt_mutex_waiter", "pi_tree")
         .or_else(|| btf.field("rt_mutex_waiter", "pi_tree_entry"));
-    let wake_state = btf.field("rt_mutex_waiter", "wake_state");
-    if pi_tree.is_none() || wake_state.is_none() {
-        return Err(ExtractError::new(
-            "BTF rt_mutex_waiter.pi_tree/wake_state missing",
-        ));
+    if pi_tree.is_none() {
+        return Err(ExtractError::new("BTF rt_mutex_waiter.pi_tree missing"));
     }
     let pi_tree = pi_tree.unwrap() as u64;
-    let wake_state = wake_state.unwrap() as u64;
+    // 5.10's flat waiter has no wake_state; there the init store issues a
+    // plain self-store and the cross-check below keeps a wake-less candidate
+    // only when the waiter local is unique anyway.
+    let wake_state = btf.field("rt_mutex_waiter", "wake_state");
+    let wake_state = match wake_state {
+        Some(offset) => offset as u64,
+        None => {
+            eprintln!("info: BTF rt_mutex_waiter has no wake_state (5.10 flat waiter)");
+            u64::MAX
+        }
+    };
 
     let mut waiter_candidates: Vec<(String, u64)> = Vec::new();
     for (reg, imm) in add_sp_immediates(&dis["futex_wait"]) {
@@ -436,7 +443,8 @@ pub fn derive_futex_waiter(
                     .unwrap()
                     .is_match(line)
             });
-            let wake_store = wake_state == 0
+            let wake_store = wake_state == u64::MAX
+                || wake_state == 0
                 || lines.iter().any(|line| {
                     Regex::new(&format!(
                         r"(?i)\bstr\s+w\d+,\s*\[sp,\s*#0x{:x}\]",
@@ -467,7 +475,7 @@ pub fn derive_futex_waiter(
     validate_frame_live_at(&dis["futex_wait"], &anchor, "futex_wait")?;
 
     let mut required_fields = vec![*waiter_local];
-    if wake_state != 0 {
+    if wake_state != u64::MAX && wake_state != 0 {
         required_fields.push(waiter_local + wake_state);
     }
     for required in required_fields {

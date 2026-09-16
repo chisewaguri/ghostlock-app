@@ -283,10 +283,14 @@ static void fill_external_entry(struct kernel_offsets *out,
     }
   }
   /* a zeroed entry selects the 6.6 waiter layout; warn rather than fail quietly */
-  if (strncmp(out->uname_r, "6.1.", 4) == 0 && !out->compact_waiter) {
+  if ((strncmp(out->uname_r, "6.1.", 4) == 0 ||
+       strncmp(out->uname_r, "5.10.", 5) == 0 ||
+       strncmp(out->uname_r, "5.15.", 5) == 0) &&
+      !out->compact_waiter) {
     fprintf(stderr,
-            "warning: imported 6.1 entry has no compact_waiter; it will run "
-            "the 6.6 rb_node waiter layout and miss\n");
+            "warning: imported %.*s entry has no compact_waiter; it will run "
+            "the 6.6 rb_node waiter layout and miss\n",
+            (int)(strchr(out->uname_r, '.') - out->uname_r + 2), out->uname_r);
   }
 }
 

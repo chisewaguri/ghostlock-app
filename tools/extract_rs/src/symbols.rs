@@ -51,6 +51,9 @@ pub const STRUCT_FIELDS: &[(&str, &[(&str, &str)])] = &[
             ("waiter_pi_tree", "pi_tree"),
             ("waiter_task", "task"),
             ("waiter_lock", "lock"),
+            // 5.10 carries prio/deadline instead of wake_state and has no
+            // ww_ctx at all; both stay 0 and the runtime uses the pselect
+            // word-shift stamp to place the fake waiter.
             ("waiter_wake_state", "wake_state"),
             ("waiter_ww_ctx", "ww_ctx"),
             ("waiter_tree", "tree_entry"),
