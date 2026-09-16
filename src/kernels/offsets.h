@@ -9,12 +9,11 @@ struct kernel_offsets {
   uint64_t kernel_phys_load;
   /* pselect fd_set waiter word shift; 0 uses target.h default. */
   int pselect_waiter_shift;
-  /* Byte distance from the fd_set word0 to the stale waiter, measured
-   * against the futex frame; negative means the fd_set copy stops short
-   * of the waiter and pselect cannot write (5.15). 0 keeps the
-   * structural default. */
+  /* Byte distance from the fd_set word0 to the stale waiter. Negative means
+   * the copy stops short of the waiter and pselect cannot write (5.15), 0
+   * keeps the structural default. */
   int pselect_waiter_off;
-  /* Multicast option-buffer waiter offset; 0 disables the mcast route. */
+  /* 0 disables the mcast route. */
   int mcast_waiter_off;
   /* setsockopt option buffer that covers the stale waiter. */
   uint32_t mcast_buffer_size, mcast_task_offset, mcast_lock_offset;
@@ -87,6 +86,7 @@ struct kernel_offsets {
 
 static const struct kernel_offsets known_offsets[] = {
 /* Add new kernels by creating src/kernels/<uname-release>/offsets.h */
+#include "5.10.209-android12-9-00019-g4ea09a298bb4-ab12292661/offsets.h"
 #include "5.10.236-android12-9-00003-gfb24cf99ad97-ab14313284/offsets.h"
 #include "6.1.115-android14-11-ga2521ca27699-ab13294383/offsets.h"
 #include "6.1.118-android14-11-ga3b9c44908dd-ab13320413/offsets.h"
