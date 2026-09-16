@@ -110,6 +110,7 @@ pub fn render_device(
     structs: &BTreeMap<String, Option<u32>>,
     phys: Option<u64>,
     pselect_shift: i64,
+    pselect_waiter_off: i64,
     mcast: Option<&McastLayout>,
 ) -> String {
     let mut lines = vec![format!("/* {release} */"), String::new()];
@@ -127,6 +128,9 @@ pub fn render_device(
     // 6.1 entries get their mm_struct_sz=0x400 stride from the
     // STRUCT_OFFSETS_6_1 macro itself; nothing extra to emit here.
     lines.push(format!("    .pselect_waiter_shift = {pselect_shift},"));
+    if pselect_waiter_off != 0 {
+        lines.push(format!("    .pselect_waiter_off = {pselect_waiter_off},"));
+    }
     if let Some(mcast) = mcast {
         lines.push(format!("    .mcast_waiter_off = 0x{:x},", mcast.waiter_off));
         lines.push(format!(
@@ -171,6 +175,7 @@ pub fn render_c(
     structs: &BTreeMap<String, Option<u32>>,
     phys: Option<u64>,
     pselect_shift: i64,
+    pselect_waiter_off: i64,
     mcast: Option<&McastLayout>,
 ) -> String {
     let label = release.unwrap_or(name);
@@ -223,6 +228,9 @@ pub fn render_c(
         lines.push(format!("  .kernel_phys_load=0x{:X},", phys.unwrap()));
     }
     lines.push(format!("  .pselect_waiter_shift={pselect_shift},"));
+    if pselect_waiter_off != 0 {
+        lines.push(format!("  .pselect_waiter_off={pselect_waiter_off},"));
+    }
     if matches!(
         macro_name,
         Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_15")
@@ -267,6 +275,7 @@ pub fn build_report(
     structs: &BTreeMap<String, Option<u32>>,
     btf_size: usize,
     pselect_shift: i64,
+    pselect_waiter_off: i64,
     mcast: Option<&McastLayout>,
 ) -> Value {
     let symbol_json: BTreeMap<String, Value> = symbols
@@ -298,6 +307,7 @@ pub fn build_report(
         "kimage_text_base": base,
         "kernel_phys_load": phys,
         "pselect_waiter_shift": pselect_shift,
+        "pselect_waiter_off": pselect_waiter_off,
         "symbols": symbol_json,
         "struct_fields": struct_json,
         "btf_size": btf_size,
@@ -560,6 +570,7 @@ mod tests {
             &structs,
             None,
             1,
+            8,
             None,
         );
         assert!(out.contains("STRUCT_OFFSETS_6_1"));
@@ -573,6 +584,7 @@ mod tests {
             &structs,
             None,
             -2,
+            0,
             None,
         );
         assert!(out66.contains("STRUCT_OFFSETS_6_6"));
@@ -601,11 +613,13 @@ mod tests {
             &structs,
             None,
             -2,
+            -0x2F8,
             Some(&mcast),
         );
         assert!(out.contains("STRUCT_OFFSETS_5_15"));
         assert!(out.contains(".compact_waiter=1"));
         assert!(out.contains(".mm_struct_sz=0x400"));
+        assert!(out.contains(".pselect_waiter_off=-760,"));
         assert!(out.contains(".mcast_waiter_off=0x60,"));
         assert!(out.contains(".mcast_buffer_size=0x108"));
         assert!(out.contains(".mcast_task_offset=0x30"));

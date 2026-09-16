@@ -125,6 +125,9 @@ pub struct PselectLayout {
     pub pselect_word0: i64,
     pub futex_waiter: i64,
     pub pselect_buffer: u64,
+    /// Signed distance from the fd_set word0 to the futex waiter: positive
+    /// qword = waiter inside the copied window, negative = copy stops short.
+    pub waiter_off: i64,
     pub chain: String,
     pub futex_chain: String,
     pub frames: BTreeMap<String, u64>,
@@ -300,6 +303,7 @@ pub fn derive_pselect_layout(
         pselect_word0,
         futex_waiter,
         pselect_buffer,
+        waiter_off: delta,
         chain,
         futex_chain: futex.chain,
         frames,
