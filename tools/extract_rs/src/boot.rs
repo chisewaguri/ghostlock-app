@@ -251,14 +251,23 @@ impl BootImage {
     }
 
     pub fn release(&self) -> Option<String> {
+        // a printf format string in the image reads "Linux version %s" too, so
+        // take the banner whose next byte starts the upstream version
         let needle = b"Linux version ";
-        let pos = find_subslice(&self.kernel, needle)?;
-        let rest = &self.kernel[pos + needle.len()..];
-        let end = rest
-            .iter()
-            .position(|b| *b == 0 || *b == b'\r' || *b == b'\n' || *b == b' ')
-            .unwrap_or(rest.len());
-        Some(String::from_utf8_lossy(&rest[..end]).into_owned())
+        let mut cursor = 0usize;
+        while let Some(pos) = find_subslice_from(&self.kernel, needle, cursor) {
+            cursor = pos + 1;
+            let rest = &self.kernel[pos + needle.len()..];
+            if !rest.first().is_some_and(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let end = rest
+                .iter()
+                .position(|b| *b == 0 || *b == b'\r' || *b == b'\n' || *b == b' ')
+                .unwrap_or(rest.len());
+            return Some(String::from_utf8_lossy(&rest[..end]).into_owned());
+        }
+        None
     }
 
     /// Locate the embedded BTF blob (largest valid candidate), returning its

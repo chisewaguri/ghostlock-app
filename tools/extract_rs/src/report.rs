@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use serde_json::{Value, json};
 
+use crate::derive::McastLayout;
 use crate::error::{ExtractError, Result};
 use crate::symbols::{OPTIONAL_SYMBOLS, STRUCT_FIELDS, SYMBOLS};
 
@@ -63,7 +64,7 @@ pub fn phys_needs_override(release: Option<&str>, phys: Option<u64>) -> bool {
     }
     let default = match crate::symbols::kernel_struct_macro(release) {
         Some("STRUCT_OFFSETS_6_12") => QC_PHYS_LOAD_6_12,
-        Some("STRUCT_OFFSETS_6_1") => QC_PHYS_LOAD_6_1,
+        Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_15") => QC_PHYS_LOAD_6_1,
         _ => QC_PHYS_LOAD_6_6,
     };
     phys != default
@@ -88,7 +89,7 @@ pub fn validate_kernel_phys_load(release: Option<&str>, phys: Option<u64>, mtk: 
     } else {
         match crate::symbols::kernel_struct_macro(release) {
             Some("STRUCT_OFFSETS_6_12") => QC_PHYS_LOAD_6_12,
-            Some("STRUCT_OFFSETS_6_1") => QC_PHYS_LOAD_6_1,
+            Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_15") => QC_PHYS_LOAD_6_1,
             _ => QC_PHYS_LOAD_6_6,
         }
     };
@@ -109,6 +110,7 @@ pub fn render_device(
     structs: &BTreeMap<String, Option<u32>>,
     phys: Option<u64>,
     pselect_shift: i64,
+    mcast: Option<&McastLayout>,
 ) -> String {
     let mut lines = vec![format!("/* {release} */"), String::new()];
     lines.push("OFFSETS_ENTRY(".to_string());
@@ -125,6 +127,14 @@ pub fn render_device(
     // 6.1 entries get their mm_struct_sz=0x400 stride from the
     // STRUCT_OFFSETS_6_1 macro itself; nothing extra to emit here.
     lines.push(format!("    .pselect_waiter_shift = {pselect_shift},"));
+    if let Some(mcast) = mcast {
+        lines.push(format!("    .mcast_waiter_off = 0x{:x},", mcast.waiter_off));
+        lines.push(format!(
+            "    .mcast_buffer_size = 0x{:x}, .mcast_task_offset = 0x{:x}, \
+             .mcast_lock_offset = 0x{:x},",
+            mcast.buffer_size, mcast.task_offset, mcast.lock_offset
+        ));
+    }
     for key in symbol_render_order() {
         if let Some(value) = symbols.get(key).copied().flatten() {
             lines.push(format!("    .{key} = 0x{value:08x},"));
@@ -161,6 +171,7 @@ pub fn render_c(
     structs: &BTreeMap<String, Option<u32>>,
     phys: Option<u64>,
     pselect_shift: i64,
+    mcast: Option<&McastLayout>,
 ) -> String {
     let label = release.unwrap_or(name);
     let mut lines = vec![
@@ -212,11 +223,22 @@ pub fn render_c(
         lines.push(format!("  .kernel_phys_load=0x{:X},", phys.unwrap()));
     }
     lines.push(format!("  .pselect_waiter_shift={pselect_shift},"));
-    if macro_name == Some("STRUCT_OFFSETS_6_1") {
+    if matches!(
+        macro_name,
+        Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_15")
+    ) {
         // spell the layout fields out so a manually registered header does
         // not depend on the selector macro carrying them
         lines.push("  .compact_waiter=1,".to_string());
         lines.push("  .mm_struct_sz=0x400,".to_string());
+    }
+    if let Some(mcast) = mcast {
+        lines.push(format!("  .mcast_waiter_off=0x{:X},", mcast.waiter_off));
+        lines.push(format!(
+            "  .mcast_buffer_size=0x{:X}, .mcast_task_offset=0x{:X}, \
+             .mcast_lock_offset=0x{:X},",
+            mcast.buffer_size, mcast.task_offset, mcast.lock_offset
+        ));
     }
     for key in symbol_render_order() {
         if let Some(value) = symbols.get(key).copied().flatten() {
@@ -245,6 +267,7 @@ pub fn build_report(
     structs: &BTreeMap<String, Option<u32>>,
     btf_size: usize,
     pselect_shift: i64,
+    mcast: Option<&McastLayout>,
 ) -> Value {
     let symbol_json: BTreeMap<String, Value> = symbols
         .iter()
@@ -279,10 +302,19 @@ pub fn build_report(
         "struct_fields": struct_json,
         "btf_size": btf_size,
     });
-    if crate::symbols::kernel_struct_macro(release) == Some("STRUCT_OFFSETS_6_1") {
-        // 0x400 is the device SLUB stride, not the BTF 0x3c0
+    if matches!(
+        crate::symbols::kernel_struct_macro(release),
+        Some("STRUCT_OFFSETS_6_1") | Some("STRUCT_OFFSETS_5_15")
+    ) {
+        // 0x400 is the device SLUB stride, not the BTF 0x3c0/0x3e0
         report["compact_waiter"] = json!(1);
         report["mm_struct_sz"] = json!(0x400);
+    }
+    if let Some(mcast) = mcast {
+        report["mcast_waiter_off"] = json!(mcast.waiter_off);
+        report["mcast_buffer_size"] = json!(mcast.buffer_size);
+        report["mcast_task_offset"] = json!(mcast.task_offset);
+        report["mcast_lock_offset"] = json!(mcast.lock_offset);
     }
     report
 }
@@ -355,11 +387,33 @@ pub fn existing_entries() -> BTreeMap<String, EntryFields> {
     entries
 }
 
-pub fn warn_existing_mismatches(release: &str, symbols: &BTreeMap<String, Option<u64>>) {
+pub fn warn_existing_mismatches(
+    release: &str,
+    symbols: &BTreeMap<String, Option<u64>>,
+    mcast: Option<&McastLayout>,
+) {
     let entries = existing_entries();
     let Some(existing) = entries.get(release) else {
         return;
     };
+    if let Some(mcast) = mcast {
+        let measured = [
+            ("mcast_waiter_off", mcast.waiter_off),
+            ("mcast_buffer_size", mcast.buffer_size as i64),
+            ("mcast_task_offset", mcast.task_offset as i64),
+            ("mcast_lock_offset", mcast.lock_offset as i64),
+        ];
+        for (key, value) in measured {
+            if let Some(old) = existing.get(key) {
+                if *old != value {
+                    eprintln!(
+                        "warning: {release} is already registered with .{key}=\
+                         0x{old:08X}; this image extracts 0x{value:08X}"
+                    );
+                }
+            }
+        }
+    }
     for (key, value) in symbols {
         let Some(value) = value else { continue };
         if let Some(old) = existing.get(key) {
@@ -492,7 +546,7 @@ pub fn struct_fields_reference()
 
 #[cfg(test)]
 mod tests {
-    use super::{pselect_waiter_shift_for, render_c};
+    use super::{McastLayout, pselect_waiter_shift_for, render_c};
     use std::collections::BTreeMap;
 
     #[test]
@@ -506,6 +560,7 @@ mod tests {
             &structs,
             None,
             1,
+            None,
         );
         assert!(out.contains("STRUCT_OFFSETS_6_1"));
         assert!(out.contains(".compact_waiter=1"));
@@ -518,9 +573,43 @@ mod tests {
             &structs,
             None,
             -2,
+            None,
         );
         assert!(out66.contains("STRUCT_OFFSETS_6_6"));
         assert!(!out66.contains("compact_waiter"));
+    }
+
+    #[test]
+    fn render_c_carries_the_5_15_layout_and_mcast_stamp() {
+        let symbols: BTreeMap<String, Option<u64>> = BTreeMap::new();
+        let structs: BTreeMap<String, Option<u32>> = BTreeMap::new();
+        let mcast = McastLayout {
+            waiter_off: 0x60,
+            buffer_size: 0x108,
+            task_offset: 0x30,
+            lock_offset: 0x38,
+            buffer_depth: -0x348,
+            waiter_depth: -0x2F8,
+            buffer_local: 0x18,
+            chain: "x".to_string(),
+            frames: BTreeMap::new(),
+        };
+        let out = render_c(
+            Some("5.15.178-android13-8-00021-g6f2f96be86b9-ab13729987"),
+            "x",
+            &symbols,
+            &structs,
+            None,
+            -2,
+            Some(&mcast),
+        );
+        assert!(out.contains("STRUCT_OFFSETS_5_15"));
+        assert!(out.contains(".compact_waiter=1"));
+        assert!(out.contains(".mm_struct_sz=0x400"));
+        assert!(out.contains(".mcast_waiter_off=0x60,"));
+        assert!(out.contains(".mcast_buffer_size=0x108"));
+        assert!(out.contains(".mcast_task_offset=0x30"));
+        assert!(out.contains(".mcast_lock_offset=0x38"));
     }
 
     #[test]

@@ -94,7 +94,7 @@ pub fn resolve_symbols(symbols: &BTreeMap<String, BTreeSet<u64>>, base: u64) -> 
 }
 
 /// Layout selector for a release, or None when that kernel has no measured
-/// geometry. Only 6.1, 6.6 and 6.12 are verified; callers treat None as
+/// geometry. Only 5.15, 6.1, 6.6 and 6.12 are verified; callers treat None as
 /// "use STRUCT_OFFSETS_6_6 as a testing starting point", and the extractor
 /// warns so nobody mistakes a fallback table for a verified one.
 pub fn kernel_struct_macro(release: Option<&str>) -> Option<&'static str> {
@@ -103,6 +103,8 @@ pub fn kernel_struct_macro(release: Option<&str>) -> Option<&'static str> {
     let major = parts.next()?.parse::<u32>().ok()?;
     let minor = parts.next()?.parse::<u32>().ok()?;
     match (major, minor) {
+        // 5.15 android13 builds use the same flat compact-waiter layout.
+        (5, 15) => Some("STRUCT_OFFSETS_5_15"),
         // 6.1 android14 builds use the flat compact-waiter layout.
         (6, 1) => Some("STRUCT_OFFSETS_6_1"),
         (6, 6) => Some("STRUCT_OFFSETS_6_6"),
@@ -160,7 +162,10 @@ pub fn resolve_structs(btf: Option<&Btf>) -> ResolvedStructs {
     );
     result.insert(
         "struct_slab_cache".to_string(),
-        btf.field("slab", "slab_cache"),
+        // 6.1 and later put the SLUB descriptor in struct slab; 5.15 still
+        // keeps slab_cache inside struct page's slab union.
+        btf.field("slab", "slab_cache")
+            .or_else(|| btf.field("page", "slab_cache")),
     );
     result.insert("struct_mm_struct".to_string(), btf.size("mm_struct"));
     result

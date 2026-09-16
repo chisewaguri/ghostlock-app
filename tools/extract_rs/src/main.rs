@@ -8,8 +8,8 @@ use clap::Parser;
 use ghostlock_extract::boot::{BootImage, MTK_DEFAULT_PHYS_LOAD, MTK_VADDR_BASE};
 use ghostlock_extract::btf::Btf;
 use ghostlock_extract::derive::{
-    PSELECT_ROUTE_NFDS, derive_nf_logger_registration, derive_pselect_layout,
-    ensure_rtmutex_43499_unpatched, relative_symbols,
+    McastLayout, PSELECT_ROUTE_NFDS, derive_mcast_layout, derive_nf_logger_registration,
+    derive_pselect_layout, ensure_rtmutex_43499_unpatched, relative_symbols,
 };
 use ghostlock_extract::error::{ExtractError, Result};
 use ghostlock_extract::fdt::recover_kernel_phys_load;
@@ -262,9 +262,9 @@ fn run(cli: &Cli) -> Result<i32> {
             if kernel_struct_macro(Some(release)).is_none() {
                 eprintln!(
                     "warning: {release} is not a verified kernel family \
-                     (6.1, 6.6, 6.12); emitting the 6.6 layout as a testing \
-                     starting point, verify the waiter layout and slab \
-                     stride before trusting it"
+                     (5.15, 6.1, 6.6, 6.12); emitting the 6.6 layout as a \
+                     testing starting point, verify the waiter layout and \
+                     slab stride before trusting it"
                 );
             }
         }
@@ -306,6 +306,7 @@ fn run(cli: &Cli) -> Result<i32> {
     let mut symbol_offsets = resolve_symbols(&symbols, base);
 
     let mut derived: BTreeMap<String, u64> = BTreeMap::new();
+    let mut mcast: Option<McastLayout> = None;
     if !cli.no_disasm {
         if let Some(btf) = &btf {
             match derive_pselect_layout(
@@ -361,6 +362,40 @@ fn run(cli: &Cli) -> Result<i32> {
                 }
                 Err(err) => {
                     eprintln!("warning: loggers_0_1 derivation failed: {err}");
+                }
+            }
+            if kernel_struct_macro(release.as_deref()) == Some("STRUCT_OFFSETS_5_15") {
+                match derive_mcast_layout(&boot.kernel, &rel_symbols, &sorted_offsets, btf) {
+                    Ok(layout) => {
+                        let frame_parts: Vec<String> = [
+                            "frame_setsockopt_wrapper",
+                            "frame_setsockopt_syscall",
+                            "frame_setsockopt_ops",
+                            "frame_setsockopt_proto",
+                            "frame_setsockopt_handler",
+                        ]
+                        .iter()
+                        .filter_map(|key| {
+                            layout.frames.get(*key).map(|value| {
+                                format!("{}={:#x}", key.split('_').nth(2).unwrap_or(key), value)
+                            })
+                        })
+                        .collect();
+                        eprintln!(
+                            "info: mcast chain {} frames={} buffer=sp+{:#x} (svc{}) \
+                             waiter=svc{} waiter_off={:#x}",
+                            layout.chain,
+                            frame_parts.join(" "),
+                            layout.buffer_local,
+                            layout.buffer_depth,
+                            layout.waiter_depth,
+                            layout.waiter_off,
+                        );
+                        mcast = Some(layout);
+                    }
+                    Err(err) => {
+                        eprintln!("warning: mcast stamp derivation failed: {err}");
+                    }
                 }
             }
         } else {
@@ -454,7 +489,7 @@ fn run(cli: &Cli) -> Result<i32> {
         };
         let key = report::kernel_key(release);
         if report::existing_entries().contains_key(release) && !cli.force {
-            report::warn_existing_mismatches(release, &symbol_offsets);
+            report::warn_existing_mismatches(release, &symbol_offsets, mcast.as_ref());
             if report::kernel_header_path(&key).exists() {
                 eprintln!("info: {release} already registered; no duplicate table created");
                 return Ok(0);
@@ -466,6 +501,7 @@ fn run(cli: &Cli) -> Result<i32> {
             &struct_offsets,
             kernel_phys_load,
             pselect_shift,
+            mcast.as_ref(),
         );
         let target = report::kernel_header_path(&key);
         if target.exists()
@@ -484,7 +520,7 @@ fn run(cli: &Cli) -> Result<i32> {
         std::fs::write(&target, output).map_err(|err| ExtractError::new(format!("{err}")))?;
         eprintln!("wrote {}", target.display());
         report::register_kernel(&key)?;
-        report::warn_existing_mismatches(release, &symbol_offsets);
+        report::warn_existing_mismatches(release, &symbol_offsets, mcast.as_ref());
         return Ok(0);
     }
 
@@ -496,6 +532,7 @@ fn run(cli: &Cli) -> Result<i32> {
             &struct_offsets,
             kernel_phys_load,
             pselect_shift,
+            mcast.as_ref(),
         )
     } else {
         let report_value = report::build_report(
@@ -506,6 +543,7 @@ fn run(cli: &Cli) -> Result<i32> {
             &struct_offsets,
             btf_size,
             pselect_shift,
+            mcast.as_ref(),
         );
         serde_json::to_string_pretty(&report_value).unwrap() + "\n"
     };
