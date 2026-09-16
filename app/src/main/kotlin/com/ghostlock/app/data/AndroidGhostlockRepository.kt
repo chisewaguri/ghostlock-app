@@ -399,13 +399,30 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
         ?.associateWith { key -> if (value.isNull(key)) null else value.optLong(key) }
         ?: emptyMap()
 
-    private val scalarFields = listOf("pselect_waiter_shift", "compact_waiter", "mm_struct_sz", "kernel_phys_load")
+    private val scalarFields = listOf(
+        "pselect_waiter_shift", "pselect_waiter_off", "compact_waiter",
+        "mm_struct_sz", "kernel_phys_load",
+        "mcast_waiter_off", "mcast_buffer_size", "mcast_lock_offset",
+    )
+
+    // mirrors fit_pselect/fit_tcp/fit_mcast in src/core/util.c
+    private fun mcastFeasible(): Boolean {
+        val waiterOff = scalarValue("mcast_waiter_off") ?: 0L
+        val bufferSize = scalarValue("mcast_buffer_size") ?: 0L
+        val lockOffset = scalarValue("mcast_lock_offset") ?: 0L
+        return waiterOff > 0 && bufferSize > 0 &&
+                waiterOff + lockOffset + 8 <= bufferSize
+    }
+
+    private fun pselectFeasible(): Boolean = (scalarValue("pselect_waiter_off") ?: 0L) >= 0
 
     private fun isKernelSupported(): Boolean {
         val version = System.getProperty("os.version", "").orEmpty()
         if (version !in SupportedKernels.UNAMES && !importedOffsetsMatch(version)) return false
-        return !version.startsWith("5.15.") || (scalarValue("mcast_waiter_off") ?: 0L) != 0L
+        return mcastFeasible() || compactFeasible() || pselectFeasible()
     }
+
+    private fun compactFeasible(): Boolean = (scalarValue("compact_waiter") ?: 0L) != 0L
 
     private fun scalarValue(name: String): Long? {
         val version = System.getProperty("os.version", "").orEmpty()
@@ -420,12 +437,8 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
     }
 
     /** tcp only outranks pselect where mcast cannot run. */
-    private fun isTcpRouteSelectable(): Boolean {
-        val version = System.getProperty("os.version", "").orEmpty()
-        return !version.startsWith("5.15.") &&
-                (scalarValue("mcast_waiter_off") ?: 0L) == 0L &&
-                (scalarValue("compact_waiter") ?: 0L) != 0L
-    }
+    private fun isTcpRouteSelectable(): Boolean =
+        !mcastFeasible() && compactFeasible()
 
     private fun importedOffsetsMatch(version: String): Boolean {
         val entries = readOffsetsFile(offsetsFile) ?: return false
