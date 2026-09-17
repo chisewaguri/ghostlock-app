@@ -58,8 +58,12 @@ static int fit_mcast(void) {
              active_offsets->mcast_buffer_size;
 }
 
-/* tcp's frame plant is device-proven only on 6.x compact kernels; 5.10
- * shares compact_waiter but its TCP_ZEROCOPY_RECEIVE rejects the layout. */
+/* The frame plant puts waiter->task and waiter->lock at zc[0x28] and
+ * zc[0x30]. do_tcp_getsockopt copies at most sizeof(struct
+ * tcp_zerocopy_receive), and on 5.10 that struct ends at 0x28 (copybuf_len is
+ * the last field), so neither word is ever copied and the route has no waiter
+ * to walk. 5.15 grew the struct to 0x40, but the plant is only device-proven
+ * on 6.1. */
 static int fit_tcp(void) {
   return active_offsets && active_offsets->compact_waiter &&
          strncmp(active_offsets->uname_r, "5.", 2) != 0;

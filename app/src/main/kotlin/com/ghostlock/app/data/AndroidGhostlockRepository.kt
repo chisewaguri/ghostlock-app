@@ -427,8 +427,8 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
 
     private fun compactFeasible(): Boolean = (scalarValue("compact_waiter") ?: 0L) != 0L
 
-    // mirrors fit_tcp in src/core/util.c: tcp's frame plant is device-proven
-    // only on 6.x compact kernels
+    // mirrors fit_tcp in src/core/util.c: the frame plant writes past the end of
+    // the 5.x struct, so only 6.x compact kernels take it
     private fun tcpFeasible(): Boolean =
         compactFeasible() && !System.getProperty("os.version", "").orEmpty().startsWith("5.")
 

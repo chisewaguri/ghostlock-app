@@ -271,7 +271,11 @@ static int task_blocked_in_pselect(int tid, char *wchan, size_t size) {
   return strncmp(wchan, "do_select", strlen("do_select")) == 0;
 }
 
-/* Waits for the waiter to sit inside pselect for a few consecutive reads. */
+/* Waits for the waiter to sit inside pselect for a few consecutive reads.
+ * Only the pselect route needs this: it arms the consumer while the waiter is
+ * parked inside the syscall, so the syscall has to still be live. The tcp
+ * route arms after getsockopt has returned and the waiter has left, so
+ * checking there would always read "not in pselect". */
 static int wait_for_pselect_blocked(int tid, int confirmations,
                                     char *last_wchan, size_t last_wchan_size) {
   uint64_t deadline =
@@ -357,7 +361,8 @@ void *consumer_thread(void *arg __attribute__((unused))) {
       int delay_usec = atomic_load(&main_route_delay_usec);
       if (delay_usec > 0) usleep((useconds_t)delay_usec);
       int gate = 1;
-      if (active_offsets && active_offsets->compact_waiter) {
+      const struct route *armed = select_route();
+      if (armed && strcmp(armed->name, "pselect") == 0) {
         char wchan[64] = "<not-read>";
         gate = wait_for_pselect_blocked(
             tid, PSELECT_GUARD_CONFIRMATIONS, wchan, sizeof(wchan));
