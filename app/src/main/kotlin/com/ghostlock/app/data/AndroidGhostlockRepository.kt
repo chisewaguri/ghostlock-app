@@ -237,7 +237,8 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
             val ksud = prepareKsud(workDir, onLog)
             if (ksud != null) onLog("ksud ready") else onLog("warning: ksud not found")
             if (shizukuEnabled) {
-                // no fallback: a second chain over a half-run one is what corrupts data
+                // no fallback to direct exec: a second chain over a half-run one
+                // is what corrupts data
                 val status = ShizukuRunner.status(appContext)
                 if (status != ShizukuStatus.READY) {
                     onLog("[-] shizuku $status")
@@ -292,8 +293,8 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
                         environment()["GHOSTLOCK_CONSUMER_CORE"] = pair.consumer.toString()
                     }
                     if (safeModeEnabled) environment()["GHOSTLOCK_DISABLE_MODULES"] = "1"
-                    // index 0 is auto, the rest force a route; env restricts
-                    // the native eligible set, never enables it
+                    // index 0 is auto, the rest force a route. env restricts the
+                    // native eligible set, it never enables one.
                     if (routeChoiceIndex > 0) {
                         environment()["GHOSTLOCK_ROUTE"] = feasibleRoutes().getOrNull(routeChoiceIndex - 1) ?: ""
                     }
@@ -427,12 +428,12 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
 
     private fun compactFeasible(): Boolean = (scalarValue("compact_waiter") ?: 0L) != 0L
 
-    // mirrors fit_tcp in src/core/util.c: tcp's frame plant is device-proven
-    // only on 6.x compact kernels
+    // mirrors fit_tcp in src/core/util.c: the plant writes past the end of the
+    // 5.x struct, so only 6.x compact kernels take it
     private fun tcpFeasible(): Boolean =
         compactFeasible() && !System.getProperty("os.version", "").orEmpty().startsWith("5.")
 
-    /** feasible routes in native priority order (mcast > tcp > pselect). */
+    /** feasible routes in native priority order, mcast > tcp > pselect */
     private fun feasibleRoutes(): List<String> =
         buildList {
             if (mcastFeasible()) add("mcast")
@@ -457,10 +458,6 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
             ?.let { toKernelOffsets(it).scalars[name] }
         return imported ?: SupportedKernels.BUILTIN[version]?.get(name)
     }
-
-    /** tcp only outranks pselect where mcast cannot run. */
-    private fun isTcpRouteSelectable(): Boolean =
-        !mcastFeasible() && compactFeasible()
 
     private fun importedOffsetsMatch(version: String): Boolean {
         val entries = readOffsetsFile(offsetsFile) ?: return false

