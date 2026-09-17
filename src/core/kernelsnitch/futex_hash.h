@@ -7,6 +7,8 @@
 #include <stdint.h>
 #include <time.h>
 #include <sys/time.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 // --------------- ADDED/REPLACED FOR COMPATIBILITY ---------------
 typedef uint32_t u32;
@@ -197,9 +199,50 @@ uint32_t __futex_hash(futex_key_t *key, uint32_t futex_hashsize)
 }
 
 unsigned long futex_hashsize = -1;
+
+/* futex_init() sizes its buckets from num_possible_cpus(), which counts every
+ * core the board can bring up. sysconf(_SC_NPROCESSORS_ONLN) counts the cores
+ * awake right now, so it reads low while a core is parked and then no leak
+ * candidate can ever match the kernel's bucket. */
+static size_t cpu_count_configured(void)
+{
+    long conf = sysconf(_SC_NPROCESSORS_CONF);
+    if (conf > 0)
+        return (size_t)conf;
+    long onln = sysconf(_SC_NPROCESSORS_ONLN);
+    return onln > 0 ? (size_t)onln : 1;
+}
+
+static const char *cpu_possible_mask(void)
+{
+    static char buf[64];
+    int fd = open("/sys/devices/system/cpu/possible", O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return "?";
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0)
+        return "?";
+    buf[n] = 0;
+    char *newline = strchr(buf, '\n');
+    if (newline)
+        *newline = 0;
+    return buf;
+}
+
 void futex_init(void)
 {
-    futex_hashsize = SYSCHK(sysconf(_SC_NPROCESSORS_ONLN) * 256);
+    long onln = sysconf(_SC_NPROCESSORS_ONLN);
+    size_t cpus = cpu_count_configured();
+    /* the kernel rounds up: roundup_pow_of_two(256 * num_possible_cpus()),
+     * and its bucket is hash & (size - 1), so a non-power-of-two size would
+     * index past the buckets it should. */
+    unsigned long size = 256;
+    while (size < 256 * cpus)
+        size <<= 1;
+    futex_hashsize = size;
+    pr_info("futex hash size %lu (online=%ld configured=%zu possible=%s)\n",
+            futex_hashsize, onln, cpus, cpu_possible_mask());
 }
 uint32_t futex_hash(size_t addr, size_t mm)
 {
