@@ -50,6 +50,14 @@
        ? active_offsets->mm_struct_sz                                         \
        : MM_STRUCT_SZ)
 
+/* rt_mutex_waiter.prio offset. 6.1+ splits it off from the wake_state word
+ * above, 5.10 has no wake_state so its prio sits a word lower. */
+#define WAITER_PRIO_OFF 0x44
+#define waiter_prio_off()                                                     \
+  (active_offsets && active_offsets->waiter_prio_off                          \
+       ? active_offsets->waiter_prio_off                                      \
+       : WAITER_PRIO_OFF)
+
 #define MM_ORDER 3
 #define MM_PARTIALS 5
 extern int g_core_main;

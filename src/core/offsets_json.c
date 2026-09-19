@@ -253,6 +253,10 @@ static void fill_external_entry(struct kernel_offsets *out,
   if (v && json_parse_int(v, end, &num)) {
     out->mm_struct_sz = (uint32_t)num;
   }
+  v = json_member_value(obj, end, "waiter_prio_off");
+  if (v && json_parse_int(v, end, &num)) {
+    out->waiter_prio_off = (uint32_t)num;
+  }
   v = json_member_value(obj, end, "symbols");
   if (v && *v == '{') {
     const char *v_end = v;

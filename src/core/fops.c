@@ -458,7 +458,11 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
       {7, relink_left, "pi_left"},
       {8, fake_task, "task"},
       {9, fake_lock, "lock"},
-      {10, ((uint64_t)FAKE_WAITER_PRIO << 32) | 3, "wake_prio"},
+      {10,
+       waiter_prio_off() == WAITER_PRIO_OFF
+           ? ((uint64_t)FAKE_WAITER_PRIO << 32) | 3
+           : (uint64_t)FAKE_WAITER_PRIO,
+       "wake_prio"},
       {11, 0, "deadline"},
       {12, 0, "ww_ctx"},
     };

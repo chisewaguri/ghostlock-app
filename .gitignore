@@ -9,6 +9,7 @@ libextract.so
 build/
 .DS_Store
 __pycache__
+/.commandcode/
 /devices
 target/
 *.jks

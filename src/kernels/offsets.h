@@ -29,10 +29,24 @@ struct kernel_offsets {
   /* mm_struct SLUB stride; 0 uses target.h default (6.6 GKI 0x500).
    * android14-6.1 uses 0x400 (BTF reports 0x3c0). */
   uint32_t mm_struct_sz;
-  uint32_t _pad[3];
+  /* rt_mutex_waiter.prio byte offset; 0 uses the 6.1+ split layout.
+   * android12-5.10 has no wake_state, so its prio takes the 0x40 word. */
+  uint32_t waiter_prio_off;
+  uint32_t _pad[2];
 };
 
 #define OFFSETS_ENTRY(uname, ...) { .uname_r = uname, __VA_ARGS__ }
+
+/* android12-5.10: flat compact-waiter layout with no wake_state or ww_ctx.
+ * Fields from a same-KMI BTF reference, since those images carry none. */
+#define STRUCT_OFFSETS_5_10                                                    \
+  .task_prio = 0x84, .task_normal_prio = 0x8C, .task_sched_task_group = 0x310, \
+  .task_pi_lock = 0x86C, .task_pi_waiters = 0x880,                             \
+  .task_pi_top_task = 0x890, .task_pi_blocked_on = 0x898,                      \
+  .task_pid = 0x5C8, .task_tgid = 0x5CC,                                       \
+  .task_atomic_flags = 0x590, .task_real_cred = 0x778, .task_cred = 0x780,     \
+  .task_comm = 0x790, .task_tasks = 0x4C8, .task_seccomp = 0x848,              \
+  .compact_waiter = 1, .mm_struct_sz = 0x400, .waiter_prio_off = 0x40
 
 /* android13-5.15: same flat compact-waiter layout as 6.1. */
 #define STRUCT_OFFSETS_5_15                                                    \
@@ -119,6 +133,9 @@ static const struct kernel_offsets known_offsets[] = {
 #include "6.12.38-android16-5-g665eafb62659-ab14778838-4k/offsets.h"
 #include "6.12.38-android16-5-g844001fb8721-ab14552068-4k/offsets.h"
 #include "5.15.178-android13-8-00021-g6f2f96be86b9-ab13729987/offsets.h"
+#include "5.10.205-android12-9-00034-g4f7845197313-ab11959366/offsets.h"
+#include "5.10.209-android12-9-00019-g4ea09a298bb4-ab12292661/offsets.h"
+#include "5.10.236-android12-9-00003-gfb24cf99ad97-ab14313284/offsets.h"
   { .uname_r = NULL }
 };
 

