@@ -43,7 +43,9 @@ struct kernel_offsets {
 #define OFFSETS_ENTRY(uname, ...) { .uname_r = uname, __VA_ARGS__ }
 
 /* android12-5.10: flat compact-waiter layout with no wake_state or ww_ctx.
- * Fields from a same-KMI BTF reference, since those images carry none. */
+ * Task offsets from a same-KMI BTF reference; the mm stride measured from the
+ * image's own kmem_cache_create_usercopy("mm_struct") size (960), matching
+ * q4q's device measurement. */
 #define STRUCT_OFFSETS_5_10                                                    \
   .task_prio = 0x84, .task_normal_prio = 0x8C, .task_sched_task_group = 0x310, \
   .task_pi_lock = 0x86C, .task_pi_waiters = 0x880,                             \
@@ -51,7 +53,7 @@ struct kernel_offsets {
   .task_pid = 0x5C8, .task_tgid = 0x5CC,                                       \
   .task_atomic_flags = 0x590, .task_real_cred = 0x778, .task_cred = 0x780,     \
   .task_comm = 0x790, .task_tasks = 0x4C8, .task_seccomp = 0x848,              \
-  .compact_waiter = 1, .mm_struct_sz = 0x3e0, .waiter_prio_off = 0x40
+  .compact_waiter = 1, .mm_struct_sz = 0x3c0, .waiter_prio_off = 0x40
 
 /* android13-5.15: same flat compact-waiter layout as 6.1. */
 #define STRUCT_OFFSETS_5_15                                                    \
