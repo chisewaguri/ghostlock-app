@@ -53,7 +53,7 @@ struct kernel_offsets {
   .task_pid = 0x5C8, .task_tgid = 0x5CC,                                       \
   .task_atomic_flags = 0x590, .task_real_cred = 0x778, .task_cred = 0x780,     \
   .task_comm = 0x790, .task_tasks = 0x4C8, .task_seccomp = 0x848,              \
-  .compact_waiter = 1, .mm_struct_sz = 0x400, .waiter_prio_off = 0x40
+  .compact_waiter = 1, .mm_struct_sz = 0x3c0, .waiter_prio_off = 0x40
 
 /* android13-5.15: same flat compact-waiter layout as 6.1. */
 #define STRUCT_OFFSETS_5_15                                                    \
