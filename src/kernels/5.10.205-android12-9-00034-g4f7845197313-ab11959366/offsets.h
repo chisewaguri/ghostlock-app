@@ -3,9 +3,7 @@
 OFFSETS_ENTRY(
     "5.10.205-android12-9-00034-g4f7845197313-ab11959366",
     STRUCT_OFFSETS_5_10,
-    /* q4q (SM8450, same SoC) ships shift 0 for 5.10 pselect; the poco
-     * builds measure -2. per-device, not per-family. */
-    .pselect_waiter_shift = 0,
+    .pselect_waiter_shift = -2,
     .off_init_task = 0x0279bec0,
     .off_init_cred = 0x027b0ae0,
     .off_root_task_group = 0x02991040,
