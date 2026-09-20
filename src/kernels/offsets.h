@@ -60,15 +60,17 @@ struct kernel_offsets {
   .compact_waiter = 1, .mm_struct_sz = 0x3c0, .waiter_prio_off = 0x40
 
 /* android11-5.4: flat compact-waiter layout identical to 5.10. Task offsets
- * measured from the ROG Phone 5s 5.4.210 image disassembly; the mm stride
- * from its own kmem_cache_create_usercopy("mm_struct") size (920). */
+ * measured from the ROG Phone 5s 5.4.210 image disassembly. mm stride is the
+ * SLUB object size, not sizeof: the cache is created with size 920 and
+ * SLAB_HWCACHE_ALIGN, and calculate_sizes rounds it to the 64-byte cache
+ * line -> 960, the same stride as 5.10. */
 #define STRUCT_OFFSETS_5_4                                                     \
   .task_prio = 0x94, .task_normal_prio = 0x9C, .task_sched_task_group = 0x9C8, \
   .task_pi_lock = 0x8DC, .task_pi_waiters = 0x8E8,                             \
   .task_pi_top_task = 0x8F8, .task_pi_blocked_on = 0x900,                      \
   .task_real_cred = 0x800, .task_cred = 0x808,                                 \
   .task_comm = 0x818, .task_tasks = 0x550, .task_seccomp = 0x8B8,              \
-  .compact_waiter = 1, .mm_struct_sz = 0x398, .waiter_prio_off = 0x40
+  .compact_waiter = 1, .mm_struct_sz = 0x3c0, .waiter_prio_off = 0x40
 
 /* android13-5.15: same flat compact-waiter layout as 6.1. */
 #define STRUCT_OFFSETS_5_15                                                    \

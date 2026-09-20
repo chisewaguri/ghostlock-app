@@ -250,15 +250,15 @@ pub fn render_c(
         // not depend on the selector macro carrying them
         lines.push("  .compact_waiter=1,".to_string());
         if macro_name == Some("STRUCT_OFFSETS_5_4") {
-            lines.push("  .mm_struct_sz=0x398,".to_string());
+            // 5.4 sizeof(mm_struct)=920, but SLAB_HWCACHE_ALIGN rounds the
+            // SLUB object size to the 64-byte cache line -> stride 960
+            lines.push("  .mm_struct_sz=0x3c0,".to_string());
+            lines.push("  .waiter_prio_off=0x40,".to_string());
         } else {
             lines.push("  .mm_struct_sz=0x400,".to_string());
-        }
-        if matches!(
-            macro_name,
-            Some("STRUCT_OFFSETS_5_4") | Some("STRUCT_OFFSETS_5_10")
-        ) {
-            lines.push("  .waiter_prio_off=0x40,".to_string());
+            if macro_name == Some("STRUCT_OFFSETS_5_10") {
+                lines.push("  .waiter_prio_off=0x40,".to_string());
+            }
         }
     }
     if let Some(mcast) = mcast {
@@ -341,10 +341,10 @@ pub fn build_report(
             | Some("STRUCT_OFFSETS_5_15")
     ) {
         // 0x400 is the device SLUB stride, not the BTF 0x3c0/0x3e0; 5.4
-        // measures 0x398 from its own mm cache creation
+        // strides 0x3c0 (sizeof 920 rounded to the 64-byte cache line)
         report["compact_waiter"] = json!(1);
         if crate::symbols::kernel_struct_macro(release) == Some("STRUCT_OFFSETS_5_4") {
-            report["mm_struct_sz"] = json!(0x398);
+            report["mm_struct_sz"] = json!(0x3c0);
             report["waiter_prio_off"] = json!(0x40);
         } else {
             report["mm_struct_sz"] = json!(0x400);
