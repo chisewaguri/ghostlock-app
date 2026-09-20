@@ -65,6 +65,7 @@ pub fn phys_needs_override(release: Option<&str>, phys: Option<u64>) -> bool {
     let default = match crate::symbols::kernel_struct_macro(release) {
         Some("STRUCT_OFFSETS_6_12") => QC_PHYS_LOAD_6_12,
         Some("STRUCT_OFFSETS_6_1")
+        | Some("STRUCT_OFFSETS_5_4")
         | Some("STRUCT_OFFSETS_5_10")
         | Some("STRUCT_OFFSETS_5_15") => QC_PHYS_LOAD_6_1,
         _ => QC_PHYS_LOAD_6_6,
@@ -94,6 +95,7 @@ pub fn validate_kernel_phys_load(release: Option<&str>, phys: Option<u64>, mtk: 
         match crate::symbols::kernel_struct_macro(release) {
             Some("STRUCT_OFFSETS_6_12") => QC_PHYS_LOAD_6_12,
             Some("STRUCT_OFFSETS_6_1")
+            | Some("STRUCT_OFFSETS_5_4")
             | Some("STRUCT_OFFSETS_5_10")
             | Some("STRUCT_OFFSETS_5_15") => QC_PHYS_LOAD_6_1,
             _ => QC_PHYS_LOAD_6_6,
@@ -240,14 +242,22 @@ pub fn render_c(
     if matches!(
         macro_name,
         Some("STRUCT_OFFSETS_6_1")
+            | Some("STRUCT_OFFSETS_5_4")
             | Some("STRUCT_OFFSETS_5_10")
             | Some("STRUCT_OFFSETS_5_15")
     ) {
         // spell the layout fields out so a manually registered header does
         // not depend on the selector macro carrying them
         lines.push("  .compact_waiter=1,".to_string());
-        lines.push("  .mm_struct_sz=0x400,".to_string());
-        if macro_name == Some("STRUCT_OFFSETS_5_10") {
+        if macro_name == Some("STRUCT_OFFSETS_5_4") {
+            lines.push("  .mm_struct_sz=0x398,".to_string());
+        } else {
+            lines.push("  .mm_struct_sz=0x400,".to_string());
+        }
+        if matches!(
+            macro_name,
+            Some("STRUCT_OFFSETS_5_4") | Some("STRUCT_OFFSETS_5_10")
+        ) {
             lines.push("  .waiter_prio_off=0x40,".to_string());
         }
     }
@@ -326,14 +336,21 @@ pub fn build_report(
     if matches!(
         crate::symbols::kernel_struct_macro(release),
         Some("STRUCT_OFFSETS_6_1")
+            | Some("STRUCT_OFFSETS_5_4")
             | Some("STRUCT_OFFSETS_5_10")
             | Some("STRUCT_OFFSETS_5_15")
     ) {
-        // 0x400 is the device SLUB stride, not the BTF 0x3c0/0x3e0
+        // 0x400 is the device SLUB stride, not the BTF 0x3c0/0x3e0; 5.4
+        // measures 0x398 from its own mm cache creation
         report["compact_waiter"] = json!(1);
-        report["mm_struct_sz"] = json!(0x400);
-        if crate::symbols::kernel_struct_macro(release) == Some("STRUCT_OFFSETS_5_10") {
+        if crate::symbols::kernel_struct_macro(release) == Some("STRUCT_OFFSETS_5_4") {
+            report["mm_struct_sz"] = json!(0x398);
             report["waiter_prio_off"] = json!(0x40);
+        } else {
+            report["mm_struct_sz"] = json!(0x400);
+            if crate::symbols::kernel_struct_macro(release) == Some("STRUCT_OFFSETS_5_10") {
+                report["waiter_prio_off"] = json!(0x40);
+            }
         }
     }
     if let Some(mcast) = mcast {

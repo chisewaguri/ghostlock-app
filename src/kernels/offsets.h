@@ -37,7 +37,11 @@ struct kernel_offsets {
   /* rt_mutex_waiter.prio byte offset; 0 uses the 6.1+ split layout.
    * android12-5.10 has no wake_state, so its prio takes the 0x40 word. */
   uint32_t waiter_prio_off;
-  uint32_t _pad[2];
+  /* Stamp through select(2) instead of pselect6 (android11-5.4, where the
+   * fat futex syscall frame puts the stale waiter outside the pselect6
+   * window but inside the select one). 0 keeps pselect6. */
+  uint32_t route_select;
+  uint32_t _pad[1];
 };
 
 #define OFFSETS_ENTRY(uname, ...) { .uname_r = uname, __VA_ARGS__ }
@@ -54,6 +58,17 @@ struct kernel_offsets {
   .task_atomic_flags = 0x590, .task_real_cred = 0x778, .task_cred = 0x780,     \
   .task_comm = 0x790, .task_tasks = 0x4C8, .task_seccomp = 0x848,              \
   .compact_waiter = 1, .mm_struct_sz = 0x3c0, .waiter_prio_off = 0x40
+
+/* android11-5.4: flat compact-waiter layout identical to 5.10. Task offsets
+ * measured from the ROG Phone 5s 5.4.210 image disassembly; the mm stride
+ * from its own kmem_cache_create_usercopy("mm_struct") size (920). */
+#define STRUCT_OFFSETS_5_4                                                     \
+  .task_prio = 0x94, .task_normal_prio = 0x9C, .task_sched_task_group = 0x9C8, \
+  .task_pi_lock = 0x8DC, .task_pi_waiters = 0x8E8,                             \
+  .task_pi_top_task = 0x8F8, .task_pi_blocked_on = 0x900,                      \
+  .task_real_cred = 0x800, .task_cred = 0x808,                                 \
+  .task_comm = 0x818, .task_tasks = 0x550, .task_seccomp = 0x8B8,              \
+  .compact_waiter = 1, .mm_struct_sz = 0x398, .waiter_prio_off = 0x40
 
 /* android13-5.15: same flat compact-waiter layout as 6.1. */
 #define STRUCT_OFFSETS_5_15                                                    \
@@ -139,6 +154,7 @@ static const struct kernel_offsets known_offsets[] = {
 #include "6.12.38-android16-5-g74ad46052215-ab14494108-4k/offsets.h"
 #include "6.12.38-android16-5-g665eafb62659-ab14778838-4k/offsets.h"
 #include "6.12.38-android16-5-g844001fb8721-ab14552068-4k/offsets.h"
+#include "5.4.210-qgki-perf-gc89cd02a7dfe/offsets.h"
 #include "5.15.178-android13-8-00021-g6f2f96be86b9-ab13729987/offsets.h"
 #include "5.10.205-android12-9-00034-g4f7845197313-ab11959366/offsets.h"
 #include "5.10.209-android12-9-00019-g4ea09a298bb4-ab12292661/offsets.h"

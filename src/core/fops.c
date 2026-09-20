@@ -590,18 +590,21 @@ void do_pselect_fake_lock_route(void) {
             attempt, attempts, compact_route, fops_elapsed_ms(&route_t0));
     errno = 0;
     int ret;
-    if (compact_route) {
+    if (compact_route && !(active_offsets && active_offsets->route_select)) {
       struct timespec ts = {
         .tv_sec = compact_timeout_sec,
         .tv_nsec = compact_timeout_usec * 1000,
       };
       ret = pselect(PSELECT_ROUTE_NFDS, &in, &out, &ex, &ts, NULL);
     } else {
-      /* non-compact stays on select with its 200ms timeout */
+      /* non-compact stays on select with its 200ms timeout; route_select
+       * kernels (android11-5.4) stamp through select too, with the compact
+       * timeout, because their stale waiter sits outside the pselect6
+       * window but inside the select one */
       struct timeval timeout = {
-        .tv_sec = PSELECT_TIMEOUT_SEC,
+        .tv_sec = compact_route ? compact_timeout_sec : PSELECT_TIMEOUT_SEC,
 #ifdef PSELECT_TIMEOUT_USEC
-        .tv_usec = PSELECT_TIMEOUT_USEC,
+        .tv_usec = compact_route ? compact_timeout_usec : PSELECT_TIMEOUT_USEC,
 #else
         .tv_usec = 0,
 #endif

@@ -105,6 +105,8 @@ pub fn kernel_struct_macro(release: Option<&str>) -> Option<&'static str> {
     let major = parts.next()?.parse::<u32>().ok()?;
     let minor = parts.next()?.parse::<u32>().ok()?;
     match (major, minor) {
+        // 5.4 android11 builds use the same flat compact-waiter layout.
+        (5, 4) => Some("STRUCT_OFFSETS_5_4"),
         // 5.10 android12 builds use a flat compact-waiter layout too, one
         // word shorter than 5.15's.
         (5, 10) => Some("STRUCT_OFFSETS_5_10"),
