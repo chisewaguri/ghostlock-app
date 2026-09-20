@@ -77,6 +77,13 @@
 #define TASK_THREAD_INFO_FLAGS_OFF 0x00
 #define TASK_SECCOMP_OFF 0x8e8
 
+/* offsetof(struct tracepoint, funcs) is not constant across KMIs: 6.6
+ * inserted __probestub before regfunc, pushing funcs 0x40 -> 0x48. Verified
+ * on 6.1 (0x40/0x48 stride) and 6.6 (0x48/0x50 stride) via
+ * __traceiter_sys_exit and the kallsyms tracepoint symbol gaps. */
+#define TRACEPOINT_FUNCS_OFF_6_1 0x40
+#define TRACEPOINT_FUNCS_OFF_6_6 0x48
+
 #define CRED_UID_OFF 8
 #define CRED_SECUREBITS_OFF 40
 #define CRED_CAPS_OFF 48

@@ -41,7 +41,9 @@ struct kernel_offsets {
    * fat futex syscall frame puts the stale waiter outside the pselect6
    * window but inside the select one). 0 keeps pselect6. */
   uint32_t route_select;
-  uint32_t _pad[1];
+  /* Vivo vr.ko: __tracepoint_sys_exit offset from _text. 0 = skip; the
+   * neutralization only runs when vr.ko shows up in /proc/modules. */
+  uint64_t off_vr_sys_exit_tp;
 };
 
 #define OFFSETS_ENTRY(uname, ...) { .uname_r = uname, __VA_ARGS__ }

