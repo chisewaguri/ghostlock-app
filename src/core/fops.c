@@ -526,7 +526,12 @@ void do_pselect_fake_lock_route(void) {
   SYSCHK(pipe(pipefd));
 
   int compact_route = active_offsets && active_offsets->compact_waiter;
-  int attempts = compact_route ? PSELECT_CFI_ROUTE_ATTEMPTS : 1;
+  /* each attempt resprays, so this is bounded by the app timeout rather than
+   * by a session budget; sweep it on device (NebuSec's pselect route uses 24) */
+  int attempts = compact_route
+                     ? env_int("GHOSTLOCK_PSELECT_ATTEMPTS",
+                               PSELECT_CFI_ROUTE_ATTEMPTS, 1, 64)
+                     : 1;
   long compact_timeout_sec;
   long compact_timeout_usec;
   if (compact_route) {
