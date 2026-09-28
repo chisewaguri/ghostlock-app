@@ -302,11 +302,15 @@ void *consumer_thread(void *arg __attribute__((unused))) {
         atomic_fetch_add(&consumer_calls, 1);
         atomic_store(&consumer_inflight, 1);
         errno = 0;
-        long sched_ret = sched_setattr_tid(tid, PSELECT_CONSUMER_NICE);
+        /* rotate the nice every call; (calls%19)+1 is what makes
+         * sched_setattr succeed on 6.1 compact */
+        int consumer_nice = (active_offsets && active_offsets->compact_waiter)
+                                ? (calls_this_seq % 19) + 1
+                                : PSELECT_CONSUMER_NICE;
+        long sched_ret = sched_setattr_tid(tid, consumer_nice);
         int setattr_errno = errno;
         pr_info("consumer call tid=%d nice=%d ret=%ld errno=%d\n",
-                tid, PSELECT_CONSUMER_NICE, sched_ret,
-                sched_ret ? setattr_errno : 0);
+                tid, consumer_nice, sched_ret, sched_ret ? setattr_errno : 0);
         if (sched_ret != 0) {
           struct timespec ft = {.tv_sec = 0, .tv_nsec = 50000000};
           long fret = futex_op(&f_pi_target, FUTEX_LOCK_PI, 0, &ft, NULL, 0);

