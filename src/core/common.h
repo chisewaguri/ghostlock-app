@@ -209,6 +209,7 @@ void fdset_put_word(fd_set *set, int word, uint64_t value);
 uint64_t fdset_get_word(const fd_set *set, int word);
 int tcp_route_selected(void);
 int kernel5_route_selected(void);
+int mcast_geometry_ok(void);
 void open_selected_fds(
     fd_set *in, fd_set *out, fd_set *ex, int read_fd, int write_fd);
 void reserve_standard_io(void);

