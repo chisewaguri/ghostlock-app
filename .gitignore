@@ -1,4 +1,6 @@
 /ghostlock
+/route_geom_check
+/route_geom_check.exe
 local.properties
 .gradle/
 .idea/

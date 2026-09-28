@@ -1,4 +1,5 @@
 #include "common.h"
+#include "route_geom.h"
 #include "runtime_struct_offsets.h"
 #include "kernelsnitch/kernelsnitch.h"
 
@@ -68,11 +69,7 @@ int tcp_route_selected(void) {
  * the route predicate and run_exploit's 5.15 refusal so the two cannot
  * diverge into a silent fallthrough onto pselect. */
 int mcast_geometry_ok(void) {
-  return active_offsets && active_offsets->mcast_waiter_off > 0 &&
-         active_offsets->mcast_buffer_size > 0 &&
-         (uint32_t)active_offsets->mcast_waiter_off +
-                 active_offsets->mcast_lock_offset + 8 <=
-             active_offsets->mcast_buffer_size;
+  return mcast_geometry_ok_off(active_offsets);
 }
 
 int kernel5_route_selected(void) {

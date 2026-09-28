@@ -29,9 +29,15 @@ CFLAGS = -O2 -flto -Wall -Wno-unused-parameter -Wno-sign-compare -Wno-unused-fun
   -Isrc/core -Isrc/kernels -DTARGET_CONFIG_H=\"$(TARGET_CONFIG)\"
 LDFLAGS := -fPIE -pie -pthread -flto
 
-.PHONY: all clean product
+.PHONY: all clean product route-geom-check
 
 all: ghostlock
+
+# Host-side check of the route geometry predicates (no NDK, no device).
+CC_HOST ?= cc
+route-geom-check:
+	$(CC_HOST) -Isrc -Isrc/core -Isrc/kernels -Wall -o route_geom_check test/route_geom_check.c
+	./route_geom_check
 
 ghostlock: $(SRCS) $(HDRS)
 	@echo "Using NDK compiler: $(NDK_CC)"
@@ -43,4 +49,4 @@ product: ghostlock
 	@echo "构建 APK: .\gradlew.bat :app:assembleDebug"
 
 clean:
-	rm -f ghostlock
+	rm -f ghostlock route_geom_check
