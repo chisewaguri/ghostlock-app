@@ -59,7 +59,13 @@ int tcp_route_selected(void) {
   }
   /* tcp's zerocopy window ends before the plant on 5.x, so tcp is a 6.1+
    * transport and 5.10 parks on pselect. 5.15 keeps the tcp cook for the
-   * spray while mcast is the transport. */
+   * spray while mcast is the transport.
+   *
+   * compact_waiter is load-bearing, not just a default: the route stamps the
+   * zc word at 0x28 onto waiter+task_off, so it needs the local at
+   * waiter + task_off - 0x28. That holds for the compact waiter (task 0x30 ->
+   * +0x08) and not for the 0x50 layouts, where the stamp lands mid-waiter and
+   * the PI walk faults. Do not relax this without a layout that reaches it. */
   return active_offsets && active_offsets->compact_waiter &&
          (kernel5_route_selected() ||
           strncmp(active_offsets->uname_r, "5.", 2) != 0);
