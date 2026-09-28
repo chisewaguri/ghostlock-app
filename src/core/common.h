@@ -179,6 +179,7 @@ long futex_op(
     uint32_t *uaddr, int op, uint32_t val,
     const struct timespec *timeout, uint32_t *uaddr2, uint32_t val3);
 long sched_setattr_tid(int tid, int nice_value);
+int env_int(const char *name, int dflt, int lo, int hi);
 uintptr_t p0_data_alias(uintptr_t image_addr);
 uintptr_t data_addr(uintptr_t image_addr);
 void clear_pselect_write(void);

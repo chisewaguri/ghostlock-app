@@ -183,6 +183,18 @@ void disable_rseq_for_thread(void) {
   return;
 }
 
+int env_int(const char *name, int dflt, int lo, int hi) {
+  const char *s = getenv(name);
+  if (!s || !*s) return dflt;
+  char *end = NULL;
+  long v = strtol(s, &end, 0);
+  if (end == s || *end || v < lo || v > hi) {
+    pr_warning("invalid %s=%s; using %d\n", name, s, dflt);
+    return dflt;
+  }
+  return (int)v;
+}
+
 long futex_op(uint32_t *uaddr, int op, uint32_t val,
               const struct timespec *timeout, uint32_t *uaddr2,
               uint32_t val3) {
