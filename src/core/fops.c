@@ -762,7 +762,24 @@ void do_prctl_mm_map_route(void) {
     uint64_t auxv;
     uint32_t auxv_size, exe_fd;
   } map;
+  /* validate_prctl_map_addr wants every field in [mmap_min_addr, TASK_SIZE)
+   * and the pairs ordered. mmap_min_addr is 0x10000 on Android, so a base
+   * there, with start_code=end_code and arg_start=arg_end, passes both the
+   * range and the order checks. RLIMIT_DATA is unlimited so the data-limit
+   * check passes. */
+  const uint64_t base = 0x10000;
   memset(&map, 0, sizeof(map));
+  map.start_code = base;
+  map.end_code = base;
+  map.start_data = base;
+  map.end_data = base;
+  map.start_brk = base;
+  map.brk = base;
+  map.start_stack = base;
+  map.arg_start = base;
+  map.arg_end = base;
+  map.env_start = base;
+  map.env_end = base;
   map.auxv = (uint64_t)(uintptr_t)payload;
   map.auxv_size = (uint32_t)size;
   map.exe_fd = 0xffffffffu;
