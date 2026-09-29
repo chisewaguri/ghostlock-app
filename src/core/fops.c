@@ -850,9 +850,10 @@ void do_prctl_mm_map_route(void) {
  * dev node to open. The stamp fills the whole struct, so the copy zeroes the
  * waiter and plants the fake page pointers just like the mcast arm. */
 static const char *const ioctl_fallback_nodes[] = {
+  /* binderfs control nodes; the entry's ioctl_cmd is a binderfs command, so
+   * only same-handler nodes may be tried here */
   "/dev/binderfs/binder-control",
   "/dev/binder/binder-control",
-  "/dev/binderfs",
   NULL,
 };
 
