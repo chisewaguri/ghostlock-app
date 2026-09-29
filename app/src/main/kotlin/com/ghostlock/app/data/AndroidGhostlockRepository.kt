@@ -402,8 +402,16 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
         val version = System.getProperty("os.version", "").orEmpty()
         if (version !in SupportedKernels.UNAMES && !importedOffsetsMatch(version)) return false
         // the mcast stamp is 5.15's only window over the waiter, so a 5.15
-        // profile without the constants has no transport
-        return !version.startsWith("5.15.") || (scalarValue("mcast_waiter_off") ?: 0L) != 0L
+        // profile without the geometry has no transport, same refusal as
+        // mcast_geometry_ok in src/core/route_geom.h
+        return !version.startsWith("5.15.") || mcastGeometryOk()
+    }
+
+    private fun mcastGeometryOk(): Boolean {
+        val waiter = scalarValue("mcast_waiter_off") ?: 0L
+        val buffer = scalarValue("mcast_buffer_size") ?: 0L
+        val lock = scalarValue("mcast_lock_offset") ?: 0L
+        return waiter > 0 && buffer > 0 && waiter + lock + 8 <= buffer
     }
 
     private fun scalarValue(name: String): Long? {
@@ -421,7 +429,9 @@ class AndroidGhostlockRepository(context: Context) : GhostlockRepository {
     /** mcast outranks tcp/pselect, and 5.15 runs on mcast or not at all. */
     private fun isTcpRouteSelectable(): Boolean {
         val version = System.getProperty("os.version", "").orEmpty()
-        return !version.startsWith("5.15.") &&
+        // native tcp_route_selected also excludes every 5.x release: the
+        // zerocopy window ends before the plant, so 5.4 and 5.10 are pselect
+        return !version.startsWith("5.") &&
                 (scalarValue("mcast_waiter_off") ?: 0L) == 0L &&
                 (scalarValue("compact_waiter") ?: 0L) != 0L
     }

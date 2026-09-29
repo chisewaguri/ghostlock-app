@@ -54,6 +54,34 @@ int main(void) {
   /* NULL entry is not selectable */
   assert(mcast_geometry_ok_off(NULL) == 0);
 
+  /* prctl route: the auxv payload is the stamp buffer, so its size has to
+   * cover every waiter word the payload writes */
+  const char *prctl_rel = "6.12.58-android16-6-gff10eaa8f8a4-ab15575650-4k";
+  const struct kernel_offsets *p = lookup(prctl_rel);
+  assert(p && "prctl release missing from known_offsets");
+  printf("%-8s prctl_geometry=%d waiter=%#x size=%#x compact=%u\n", "prctl",
+         prctl_geometry_ok_off(p), p->prctl_waiter_off, p->prctl_auxv_size,
+         p->compact_waiter);
+  assert(prctl_geometry_ok_off(p) == 1);
+
+  /* one qword short of the last word the rb_node payload writes */
+  struct kernel_offsets short_auxv = *p;
+  short_auxv.prctl_auxv_size = p->prctl_waiter_off + 0x70 - 8;
+  assert(prctl_geometry_ok_off(&short_auxv) == 0);
+
+  /* exact fit passes */
+  short_auxv.prctl_auxv_size = p->prctl_waiter_off + 0x70;
+  assert(prctl_geometry_ok_off(&short_auxv) == 1);
+
+  /* oversized payload would blow the stack, cap rejects it */
+  struct kernel_offsets huge_auxv = *p;
+  huge_auxv.prctl_auxv_size = 0x1000;
+  assert(prctl_geometry_ok_off(&huge_auxv) == 0);
+
+  /* an entry that never set the prctl geometry is not selectable */
+  assert(prctl_geometry_ok_off(e) == 0);
+  assert(prctl_geometry_ok_off(NULL) == 0);
+
   printf("route geometry checks passed\n");
   return 0;
 }

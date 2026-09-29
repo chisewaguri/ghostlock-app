@@ -821,8 +821,9 @@ pub fn derive_nf_logger_registration(
     })
 }
 
-/// The measured-eligibility predicates, shared with the C route table
-/// (src/core/util.c fit_mcast/fit_tcp/fit_pselect) and the app gate.
+/// The measured-eligibility predicates. The C side mirrors these in
+/// src/core/route_geom.h (mcast_geometry_ok_off) and the tcp/pselect route
+/// predicates in src/core/util.c; keep them in step by hand.
 pub mod fit {
     /// The option buffer must cover the waiter's task+lock+len words.
     pub fn mcast(buffer_size: u64, waiter_off: i64, lock_offset: u64) -> bool {

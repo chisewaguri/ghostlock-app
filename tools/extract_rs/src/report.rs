@@ -443,6 +443,17 @@ pub fn warn_existing_mismatches(
     symbols: &BTreeMap<String, Option<u64>>,
     mcast: Option<&McastLayout>,
 ) {
+    // route_select is hand-added (android11-5.4 stamps through select(2)) and
+    // nothing here derives it, so a --force re-register would drop it silently.
+    if std::fs::read_to_string(kernel_header_path(release))
+        .map(|text| text.contains(".route_select"))
+        .unwrap_or(false)
+    {
+        eprintln!(
+            "warning: {release} carries .route_select, which this render cannot \
+             derive; re-add it by hand after registering"
+        );
+    }
     let entries = existing_entries();
     let Some(existing) = entries.get(release) else {
         return;

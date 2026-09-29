@@ -1136,7 +1136,12 @@ static uint32_t tracepoint_funcs_off(void) {
     return TRACEPOINT_FUNCS_OFF_6_1;
   }
   if (maj > 6 || (maj == 6 && min >= 6)) return TRACEPOINT_FUNCS_OFF_6_6;
-  return TRACEPOINT_FUNCS_OFF_6_1;
+  if (maj == 6 && min == 1) return TRACEPOINT_FUNCS_OFF_6_1;
+  /* only the 6.1 and 6.6 layouts are measured. Anywhere else a guessed offset
+   * zeroes a neighbouring member such as regfunc instead of funcs, so skip. */
+  pr_warning("vr global: tracepoint funcs offset unmeasured on %s; skipping\n",
+             r);
+  return 0;
 }
 
 /* Zero __tracepoint_sys_exit.funcs so vr.ko's sys_exit kill probe never
@@ -1152,6 +1157,7 @@ static void neutralize_vr_global(void) {
     return;
   }
   uint32_t funcs_off = tracepoint_funcs_off();
+  if (!funcs_off) return;
   uintptr_t tp =
       data_addr(KIMAGE_TEXT_BASE + active_offsets->off_vr_sys_exit_tp);
   pr_info("vr global: tp=0x%016zx funcs_off=0x%x\n", (size_t)tp, funcs_off);

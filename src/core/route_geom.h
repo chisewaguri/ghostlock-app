@@ -14,4 +14,16 @@ static inline int mcast_geometry_ok_off(const struct kernel_offsets *o) {
              o->mcast_buffer_size;
 }
 
+/* Geometry a prctl-route entry must carry: the auxv payload is the stamp
+ * buffer, so every waiter word it writes has to sit inside prctl_auxv_size.
+ * The span is the distance from w0 to the last word write_waiter_words
+ * touches, 0x50 + 8 for the compact layout and 0x68 + 8 for the rb_node one
+ * (the target.h FAKE_WAITER_* offsets). 0x400 is a stack sanity cap only. */
+static inline int prctl_geometry_ok_off(const struct kernel_offsets *o) {
+  if (!o || !o->prctl_auxv_size || o->prctl_waiter_off == 0) return 0;
+  uint32_t span = o->compact_waiter ? 0x58 : 0x70;
+  return o->prctl_auxv_size <= 0x400 &&
+         (uint32_t)o->prctl_waiter_off + span <= o->prctl_auxv_size;
+}
+
 #endif
