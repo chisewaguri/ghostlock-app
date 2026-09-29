@@ -1004,6 +1004,30 @@ pub fn derive_prctl_layout(
     let deep_frame = crate::disasm::first_sp_frame(&lines, "prctl_set_mm")?;
     let chain_sum = entry_frame + deep_frame;
 
+    // The MAP shortcut's auxv copy sits behind a `copy_from_user` of the
+    // 0x68-byte struct prctl_mm_map. A kernel without CONFIG_CHECKPOINT_RESTORE
+    // has no MAP shortcut at all, and PR_SET_MM_AUXV then carries the same
+    // memset(sp+.., 0x190) + copy shape under capable(CAP_SYS_RESOURCE), which
+    // a shell uid cannot pass (EPERM before any byte is copied). Requiring the
+    // 0x68 map copy before the large copy rejects that look-alike.
+    let has_map_copy = lines.iter().any(|line| {
+        let Some(h) = line.strip_prefix("bl 0x") else { return false };
+        let Ok(t) = u64::from_str_radix(h.trim(), 16) else { return false };
+        if !callee_is_copy(symbols, t) {
+            return false;
+        }
+        // the map copy's size register is loaded with the literal 0x68
+        // (mov x2, #0x68), distinct from the auxv copy's w2 = auxv_size
+        lines.iter().any(|l| l == "mov x2, #0x68")
+    });
+    if !has_map_copy {
+        return Err(ExtractError::infeasible(
+            "no 0x68-byte struct prctl_mm_map copy in prctl_set_mm: the auxv \
+             copy found here is PR_SET_MM_AUXV behind capable(CAP_SYS_RESOURCE), \
+             not the CONFIG_CHECKPOINT_RESTORE MAP shortcut",
+        ));
+    }
+
     // every copy_from_user in the handler: dest = nearest preceding
     // "add x0, sp, #imm", size = nearest preceding "mov w2, #imm".
     // the auxv copy is the large one (AT_VECTOR_SIZE qwords); prctl_map is

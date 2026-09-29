@@ -91,7 +91,11 @@ int prctl_route_selected(void) {
   if (s && *s) {
     return strcmp(s, "prctl") == 0;
   }
-  /* only when the entry carries the geometry; the pselect arm is the fallback */
+  /* the entry carries the geometry only when the extractor found a real
+   * prctl_set_mm_map: the MAP shortcut has to be compiled in for the auxv
+   * copy to be reachable without CAP_SYS_RESOURCE. A kernel built without
+   * CONFIG_CHECKPOINT_RESTORE keeps only the capable()-gated PR_SET_MM_AUXV
+   * look-alike, which the extractor refuses to stamp. */
   return active_offsets && active_offsets->prctl_auxv_off > 0 &&
          active_offsets->prctl_auxv_size > 0 &&
          active_offsets->prctl_waiter_off > 0;
