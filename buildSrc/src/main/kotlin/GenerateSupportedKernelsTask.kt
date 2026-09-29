@@ -58,10 +58,15 @@ abstract class GenerateSupportedKernelsTask : DefaultTask() {
     )
 
     private companion object {
-        val offsetField = Regex("\\.([A-Za-z0-9_]+)\\s*=\\s*(0[xX][0-9A-Fa-f]+|-?\\d+)")
+        val offsetField = Regex("\\.([A-Za-z0-9_]+)\\s*=\\s*(-?0[xX][0-9A-Fa-f]+|-?\\d+)")
 
-        fun parseValue(text: String): Long =
-            if (text.startsWith("0x", ignoreCase = true)) text.substring(2).toLong(16) else text.toLong()
+        fun parseValue(text: String): Long {
+            val negative = text.startsWith("-")
+            val body = if (negative) text.substring(1) else text
+            val value =
+                if (body.startsWith("0x", ignoreCase = true)) body.substring(2).toLong(16) else body.toLong()
+            return if (negative) -value else value
+        }
 
         fun format(value: Long): String = if (value < 0) "${value}L" else "0x${value.toString(16)}L"
 
