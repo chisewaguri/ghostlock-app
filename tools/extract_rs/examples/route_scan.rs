@@ -49,10 +49,16 @@ fn main() -> anyhow::Result<()> {
             }
             if let Some(d) = dest {
                 if size < 0x60 { continue; }
-                let task_in = sum as i64 - d as i64 - 0x150;
-                let lock_end = sum as i64 - d as i64 - 0x148 + 8;
-                if task_in >= 0 && lock_end <= size as i64 {
-                    rows.push((name.clone(), sum, d, size, task_in));
+                // Handler sp sits at syscall depth `sum`; a buffer copied to
+                // sp+d therefore spans depths [sum-d-size, sum-d]. Let
+                // base = sum-d be its deeper end. The stale waiter occupies
+                // depths [0x130, 0x1a0] (waiter base/tree at 0x1a0, ww_ctx end
+                // at 0x130), so the buffer covers it when base >= 0x1a0 and
+                // base-size <= 0x130; waiter_off = base-0x1a0 is the byte
+                // offset of the waiter base inside the buffer.
+                let base = sum as i64 - d as i64;
+                if base >= 0x1a0 && base - size as i64 <= 0x130 {
+                    rows.push((name.clone(), sum, d, size, base - 0x1a0));
                 }
             }
         }
