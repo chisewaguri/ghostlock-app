@@ -201,6 +201,9 @@ void cleanup_page_prepare_state(void);
 int clone_memfd(void);
 void prepare_ctxs(void);
 int prepare_skb_payload(uintptr_t base);
+void write_waiter_words(unsigned char *p, size_t w0, uintptr_t write_pc,
+                       uintptr_t write_right, uintptr_t write_left,
+                       uint64_t waiter_task, uint64_t fake_lock, int compact);
 uintptr_t prepare_kernel_page(void);
 uintptr_t prepare_good_kernel_page(void);
 
@@ -217,6 +220,8 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex);
 void do_pselect_fake_lock_route(void);
 void do_tcp_fake_lock_route(void);
 void do_kernel5_fake_lock_route(void);
+void do_prctl_mm_map_route(void);
+int prctl_route_selected(void);
 void reset_main_route_state(void);
 int run_main_route_threads(void);
 void set_pselect_write_mode(uintptr_t target, int mode);

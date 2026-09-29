@@ -315,6 +315,7 @@ fn run(cli: &Cli) -> Result<i32> {
 
     let mut derived: BTreeMap<String, u64> = BTreeMap::new();
     let mut mcast: Option<McastLayout> = None;
+    let mut prctl: Option<ghostlock_extract::derive::PrctlLayout> = None;
     let mut pselect_infeasible = false;
     if !cli.no_disasm {
         if let Some(btf) = &btf {
@@ -448,17 +449,37 @@ fn run(cli: &Cli) -> Result<i32> {
             .map(|value| *value as i64)
             .unwrap_or(0)
     };
+    if let Some(btf_ref) = &btf {
+        if !cli.no_disasm {
+            match ghostlock_extract::derive::derive_prctl_layout(
+                &boot.kernel, &rel_symbols, &sorted_offsets, btf_ref,
+            ) {
+                Ok(layout) => {
+                    eprintln!(
+                        "info: prctl route auxv_off={:#x} size={:#x} waiter_off={:#x}",
+                        layout.auxv_off, layout.auxv_size, layout.waiter_off
+                    );
+                    prctl = Some(layout);
+                }
+                Err(err) => eprintln!("warning: prctl route derivation failed: {err}"),
+            }
+        }
+    }
     let mcast_fits = mcast.as_ref().is_some_and(|layout| {
         layout.waiter_off as u64 + layout.lock_offset + 8 <= layout.buffer_size
     });
-    if pselect_waiter_off < 0 && !mcast_fits {
+    // any derived transport that covers the waiter keeps the kernel feasible:
+    // pselect (waiter_off >= 0), mcast (stamp fits), or the prctl auxv local.
+    let prctl_fits = prctl.is_some();
+    if pselect_waiter_off < 0 && !mcast_fits && !prctl_fits {
         let detail = match &mcast {
             Some(layout) => format!(
                 "pselect cannot reach the waiter and the mcast buffer misses it too \
                  (waiter_off={:#x} + lock {:#x} + 8 > buffer {})",
                 layout.waiter_off, layout.lock_offset, layout.buffer_size
             ),
-            None => "pselect cannot reach the waiter and no mcast stamp was derived"
+            None => "pselect cannot reach the waiter, no mcast stamp was derived, \
+                     and the prctl auxv local does not cover it"
                 .to_string(),
         };
         eprintln!("error: no feasible route on this kernel: {detail}");
@@ -554,6 +575,7 @@ fn run(cli: &Cli) -> Result<i32> {
             pselect_shift,
             pselect_waiter_off,
             mcast.as_ref(),
+            prctl.as_ref(),
         );
         let target = report::kernel_header_path(&key);
         if target.exists()

@@ -250,6 +250,18 @@ static void fill_external_entry(struct kernel_offsets *out,
   if (v && json_parse_int(v, end, &num)) {
     out->mcast_lock_offset = (uint32_t)num;
   }
+  v = json_member_value(obj, end, "prctl_auxv_off");
+  if (v && json_parse_int(v, end, &num)) {
+    out->prctl_auxv_off = (uint32_t)num;
+  }
+  v = json_member_value(obj, end, "prctl_auxv_size");
+  if (v && json_parse_int(v, end, &num)) {
+    out->prctl_auxv_size = (uint32_t)num;
+  }
+  v = json_member_value(obj, end, "prctl_waiter_off");
+  if (v && json_parse_int(v, end, &num)) {
+    out->prctl_waiter_off = (uint32_t)num;
+  }
   v = json_member_value(obj, end, "compact_waiter");
   if (v && json_parse_int(v, end, &num)) {
     out->compact_waiter = (uint8_t)num;

@@ -120,6 +120,7 @@ pub fn render_device(
     pselect_shift: i64,
     pselect_waiter_off: i64,
     mcast: Option<&McastLayout>,
+    prctl: Option<&crate::derive::PrctlLayout>,
 ) -> String {
     let mut lines = vec![format!("/* {release} */"), String::new()];
     lines.push("OFFSETS_ENTRY(".to_string());
@@ -145,6 +146,13 @@ pub fn render_device(
             "    .mcast_buffer_size = 0x{:x}, .mcast_task_offset = 0x{:x}, \
              .mcast_lock_offset = 0x{:x},",
             mcast.buffer_size, mcast.task_offset, mcast.lock_offset
+        ));
+    }
+    if let Some(p) = prctl {
+        lines.push(format!(
+            "    .prctl_auxv_off = 0x{:x}, .prctl_auxv_size = 0x{:x}, \
+             .prctl_waiter_off = 0x{:x},",
+            p.auxv_off, p.auxv_size, p.waiter_off
         ));
     }
     for key in symbol_render_order() {
