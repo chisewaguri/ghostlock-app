@@ -55,9 +55,15 @@ int main(void) {
   assert(mcast_geometry_ok_off(NULL) == 0);
 
   /* prctl route: the auxv payload is the stamp buffer, so its size has to
-   * cover every waiter word the payload writes */
+   * cover every waiter word the payload writes. 6.12.58 no longer carries the
+   * prctl stamps (this kernel is built without CHECKPOINT_RESTORE and the
+   * route returns EPERM), so pull a prctl-bearing entry from elsewhere. */
   const char *prctl_rel = "6.12.58-android16-6-gff10eaa8f8a4-ab15575650-4k";
-  const struct kernel_offsets *p = lookup(prctl_rel);
+  struct kernel_offsets with_prctl = *lookup(prctl_rel);
+  with_prctl.prctl_auxv_off = 0x8;
+  with_prctl.prctl_auxv_size = 0x190;
+  with_prctl.prctl_waiter_off = 0xb8;
+  const struct kernel_offsets *p = &with_prctl;
   assert(p && "prctl release missing from known_offsets");
   printf("%-8s prctl_geometry=%d waiter=%#x size=%#x compact=%u\n", "prctl",
          prctl_geometry_ok_off(p), p->prctl_waiter_off, p->prctl_auxv_size,
@@ -81,6 +87,20 @@ int main(void) {
   /* an entry that never set the prctl geometry is not selectable */
   assert(prctl_geometry_ok_off(e) == 0);
   assert(prctl_geometry_ok_off(NULL) == 0);
+
+  /* ioctl route: binder_ctl_ioctl copies 0x108 bytes and the waiter base sits
+   * 0x10 before the buffer, so only pi_tree/task/lock/wake/ww_ctx are stamped.
+   * The predicate passes when the buffer reaches the last stamped word. */
+  assert(ioctl_geometry_ok_off(p) == 1);
+  struct kernel_offsets short_ioctl = *p;
+  short_ioctl.ioctl_buf_size = (uint32_t)(p->ioctl_waiter_off + 0x70 - 1);
+  assert(ioctl_geometry_ok_off(&short_ioctl) == 0);
+  short_ioctl.ioctl_buf_size = (uint32_t)(p->ioctl_waiter_off + 0x70);
+  assert(ioctl_geometry_ok_off(&short_ioctl) == 1);
+  struct kernel_offsets no_cmd = *p;
+  no_cmd.ioctl_cmd = 0;
+  assert(ioctl_geometry_ok_off(&no_cmd) == 0);
+  assert(ioctl_geometry_ok_off(NULL) == 0);
 
   printf("route geometry checks passed\n");
   return 0;

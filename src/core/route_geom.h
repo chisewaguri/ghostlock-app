@@ -26,4 +26,17 @@ static inline int prctl_geometry_ok_off(const struct kernel_offsets *o) {
          (uint32_t)o->prctl_waiter_off + span <= o->prctl_auxv_size;
 }
 
+/* Geometry an ioctl-route entry must carry: a command, a copied-struct size,
+ * and the signed byte offset inside that struct of the waiter base. The last
+ * waiter word the stamp writes is base+ww_ctx+8, so the buffer has to reach
+ * base+0x70 (rb_node) or base+0x58 (compact); a negative offset means the copy
+ * starts partway into the waiter and only the tail words are stamped. 0x800 is
+ * a stack sanity cap. */
+static inline int ioctl_geometry_ok_off(const struct kernel_offsets *o) {
+  if (!o || !o->ioctl_cmd || !o->ioctl_buf_size) return 0;
+  if (o->ioctl_buf_size > 0x800) return 0;
+  uint32_t span = o->compact_waiter ? 0x58 : 0x70;
+  return o->ioctl_waiter_off + (int)span <= (int)o->ioctl_buf_size;
+}
+
 #endif

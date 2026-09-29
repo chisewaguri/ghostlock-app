@@ -101,6 +101,16 @@ int prctl_route_selected(void) {
          active_offsets->prctl_waiter_off > 0;
 }
 
+int ioctl_route_selected(void) {
+  const char *s = getenv("GHOSTLOCK_ROUTE");
+  if (s && *s) {
+    return strcmp(s, "ioctl") == 0;
+  }
+  /* only when the entry carries an ioctl command and geometry that covers the
+   * waiter; the pselect arm is the fallback */
+  return active_offsets && ioctl_geometry_ok_off(active_offsets);
+}
+
 void setup_kernelsnitch(void) {
   int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
   ks = kernelsnitch_setup(

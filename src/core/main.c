@@ -251,6 +251,8 @@ void *waiter_thread(void *arg __attribute__((unused))) {
     do_tcp_fake_lock_route();
   } else if (prctl_route_selected()) {
     do_prctl_mm_map_route();
+  } else if (ioctl_route_selected()) {
+    do_ioctl_fake_lock_route();
   } else {
     do_pselect_fake_lock_route();
   }

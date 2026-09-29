@@ -222,6 +222,8 @@ void do_tcp_fake_lock_route(void);
 void do_kernel5_fake_lock_route(void);
 void do_prctl_mm_map_route(void);
 int prctl_route_selected(void);
+void do_ioctl_fake_lock_route(void);
+int ioctl_route_selected(void);
 void reset_main_route_state(void);
 int run_main_route_threads(void);
 void set_pselect_write_mode(uintptr_t target, int mode);

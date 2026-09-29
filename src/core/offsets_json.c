@@ -262,6 +262,18 @@ static void fill_external_entry(struct kernel_offsets *out,
   if (v && json_parse_int(v, end, &num)) {
     out->prctl_waiter_off = (uint32_t)num;
   }
+  v = json_member_value(obj, end, "ioctl_cmd");
+  if (v && json_parse_int(v, end, &num)) {
+    out->ioctl_cmd = (uint32_t)num;
+  }
+  v = json_member_value(obj, end, "ioctl_buf_size");
+  if (v && json_parse_int(v, end, &num)) {
+    out->ioctl_buf_size = (uint32_t)num;
+  }
+  v = json_member_value(obj, end, "ioctl_waiter_off");
+  if (v && json_parse_int(v, end, &num)) {
+    out->ioctl_waiter_off = (int)num;
+  }
   v = json_member_value(obj, end, "compact_waiter");
   if (v && json_parse_int(v, end, &num)) {
     out->compact_waiter = (uint8_t)num;

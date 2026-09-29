@@ -49,6 +49,19 @@ struct kernel_offsets {
    * prctl_auxv_size its byte size, prctl_waiter_off the payload offset whose
    * +FAKE_WAITER_TASK_OFF lands on the stale waiter's task field. */
   uint32_t prctl_auxv_off, prctl_auxv_size, prctl_waiter_off;
+  /* ioctl transport: a file_operations unlocked_ioctl handler copies a user
+   * struct onto its stack, and __arm64_sys_ioctl reaches the handler with a
+   * single blr so the handler's frame alone positions the buffer. ioctl_cmd is
+   * the command to issue, ioctl_buf_size the copied struct size, and
+   * ioctl_waiter_off the signed byte offset inside that struct of the waiter
+   * base, so the waiter's task field lands at ioctl_waiter_off +
+   * FAKE_WAITER_TASK_OFF. A negative offset (the copy starts partway into the
+   * waiter) stamps only the words the buffer reaches. 0 with ioctl_cmd unset
+   * disables the route. ioctl_node names the dev node to open; NULL tries a
+   * built-in candidate list. */
+  uint32_t ioctl_cmd, ioctl_buf_size;
+  int ioctl_waiter_off;
+  const char *ioctl_node;
 };
 
 #define OFFSETS_ENTRY(uname, ...) { .uname_r = uname, __VA_ARGS__ }
