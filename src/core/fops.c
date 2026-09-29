@@ -520,6 +520,19 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
 }
 
 void do_pselect_fake_lock_route(void) {
+  /* A negative stamp is the extractor saying the fd_set copy stops short of
+   * the waiter, or starts so far above it that task/lock fall outside the
+   * user-controlled words. This arm is still reachable on such an entry when
+   * GHOSTLOCK_ROUTE names another transport, and running it plants nothing
+   * while still arming the consumer, which faults the PI walk. */
+  if (active_offsets && active_offsets->pselect_waiter_off < 0) {
+    route_last_step = 29;
+    route_last_errno = 0;
+    pr_warning("pselect cannot reach the waiter on %s; the prctl route carries "
+               "this kernel (do not force GHOSTLOCK_ROUTE)\n",
+               active_offsets->uname_r);
+    return;
+  }
   if (!page_base || !fake_lock || !fake_fops) {
     route_last_step = 30;
     route_last_errno = 0;
